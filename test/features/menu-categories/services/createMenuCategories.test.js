@@ -9,7 +9,7 @@ const refreshedToken = { deviceUuid, value: 'refreshed-token' }
 
 test('uses the authenticated device token and returns the category list', async () => {
   const categories = [{ menu_category_id: 1 }]
-  const loadMenuCategories = createMenuCategories({
+  const { loadMenuCategories } = createMenuCategories({
     auth: { getAccessToken: async () => token },
     async getMenuCategories(sessionId, accessToken) {
       assert.equal(sessionId, 123)
@@ -22,7 +22,7 @@ test('uses the authenticated device token and returns the category list', async 
 
 test('does not request categories without a token for the current device', async () => {
   for (const accessToken of [null, { deviceUuid: 'other-device' }]) {
-    const loadMenuCategories = createMenuCategories({
+    const { loadMenuCategories } = createMenuCategories({
       auth: { getAccessToken: async () => accessToken },
       getMenuCategories: () => assert.fail('Unexpected API request'),
     })
@@ -35,7 +35,7 @@ test('refreshes a rejected token and retries the same visit session only once', 
     const issuedTokens = [token, refreshedToken]
     const requestedTokens = []
     const invalidatedTokens = []
-    const loadMenuCategories = createMenuCategories({
+    const { loadMenuCategories } = createMenuCategories({
       auth: {
         getAccessToken: async () => issuedTokens.shift(),
         invalidateAccessToken: (accessToken) => invalidatedTokens.push(accessToken),
@@ -58,7 +58,7 @@ test('refreshes a rejected token and retries the same visit session only once', 
 test('surfaces non-authentication errors without reissuing a token', async () => {
   for (const status of [404, 422, 500]) {
     let tokenRequests = 0
-    const loadMenuCategories = createMenuCategories({
+    const { loadMenuCategories } = createMenuCategories({
       auth: {
         async getAccessToken() {
           tokenRequests += 1
@@ -74,4 +74,26 @@ test('surfaces non-authentication errors without reissuing a token', async () =>
     await assert.rejects(loadMenuCategories(deviceUuid, 123), { status })
     assert.equal(tokenRequests, 1)
   }
+})
+
+test('refreshes authentication for items without changing the category or visit session', async () => {
+  const issuedTokens = [token, refreshedToken]
+  const invalidated = []
+  const requests = []
+  const items = [{ menu_item_id: 10 }]
+  const { loadMenuItems } = createMenuCategories({
+    auth: {
+      getAccessToken: async () => issuedTokens.shift(),
+      invalidateAccessToken: (accessToken) => invalidated.push(accessToken),
+    },
+    async getMenuItems(categoryId, visitSessionId, accessToken) {
+      requests.push([categoryId, visitSessionId, accessToken])
+      if (accessToken === token) throw new ApiError('Unauthorized', 401)
+      return items
+    },
+  })
+
+  assert.equal(await loadMenuItems(deviceUuid, 7, 123), items)
+  assert.deepEqual(requests, [[7, 123, token], [7, 123, refreshedToken]])
+  assert.deepEqual(invalidated, [token])
 })

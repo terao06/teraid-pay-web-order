@@ -15,6 +15,7 @@ export default defineConfig(({ mode }) => {
     '^' + DEVICE_TOKEN_PATH + '$',
     '^' + VISIT_SESSION_START_PATH + '$',
     '^' + MENU_CATEGORIES_PATH + '(?:\\?.*)?$',
+    '^' + MENU_CATEGORIES_PATH + '/[^/?]+/items(?:\\?.*)?$',
   ].map((route) => [route, { target, changeOrigin: true }]))
 
   return {
@@ -28,7 +29,7 @@ export default defineConfig(({ mode }) => {
           if (!address || typeof address === 'string') return
 
           const nonce = randomBytes(16).toString('base64')
-          const connectSrc = "connect-src 'self' ws://" + localHost + ':' + address.port + ';'
+          const connectSrc = `connect-src 'self' ws://${localHost}:${address.port} ws://localhost:${address.port};`
           const styleSrc = "style-src 'self' 'nonce-" + nonce + "';"
 
           return {

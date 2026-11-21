@@ -1,7 +1,15 @@
 <script setup>
-import { nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { ApiError } from '../../components/api/apiClient.js'
+import ToastMessage from '../../components/feedback/ToastMessage.vue'
+import CartDrawer from '../cart/CartDrawer.vue'
+import { addCartItem, cartTotals, removeCartItem, setCartQuantity } from '../cart/cart.js'
+import { cartStore } from '../cart/cartStore.js'
+import MenuItemOptions from './MenuItemOptions.vue'
+import MenuItemsList from './MenuItemsList.vue'
 import { loadMenuCategories } from './menuCategories.js'
+import { formatMenuAmount } from './menuItemLabels.js'
+import { calculateMenuSubtotal, hasValidMenuOptions } from './menuItemSelection.js'
 
 const props = defineProps({
   deviceUuid: { type: String, required: true },
@@ -19,12 +27,27 @@ const requestErrors = {
 }
 
 const heading = ref(null)
+const cartTab = ref(null)
+const cartDrawer = ref(null)
 const categories = ref([])
 const selectedCategory = ref(null)
+const selectedItem = ref(null)
+const selectedOptions = ref(new Map())
+const cartLines = ref(cartStore.load(props.deviceUuid, props.visitSessionId))
+const cartToast = ref(null)
 const failedImages = ref(new Set())
 const loading = ref(true)
 const errorMessage = ref('')
 let categoryButton
+let itemButton
+let refreshCategoriesOnReturn = false
+
+const subtotal = computed(() => selectedItem.value
+  ? calculateMenuSubtotal(selectedItem.value, selectedOptions.value)
+  : null)
+const canAddToCart = computed(() => selectedItem.value && hasValidMenuOptions(selectedItem.value, selectedOptions.value))
+const cartQuantity = computed(() => cartLines.value.reduce((total, line) => total + line.quantity, 0))
+const cartAmounts = computed(() => cartTotals(cartLines.value))
 
 function focusHeading() {
   heading.value?.focus()
@@ -40,7 +63,53 @@ async function selectCategory(category, event) {
 async function returnToCategories() {
   selectedCategory.value = null
   await nextTick()
+  if (refreshCategoriesOnReturn) {
+    refreshCategoriesOnReturn = false
+    return loadCategories()
+  }
   categoryButton?.focus()
+}
+
+async function selectItem(item, button) {
+  itemButton = button
+  selectedOptions.value.clear()
+  selectedItem.value = item
+  await nextTick()
+  focusHeading()
+}
+
+async function returnToItems() {
+  selectedItem.value = null
+  await nextTick()
+  itemButton?.focus()
+}
+
+function saveCart(lines) {
+  cartLines.value = lines
+  cartStore.save(props.deviceUuid, props.visitSessionId, lines)
+}
+
+function addSelectedItem() {
+  if (!canAddToCart.value) return
+  const lines = addCartItem(cartLines.value, selectedItem.value, selectedOptions.value)
+  if (lines === cartLines.value) return
+  saveCart(lines)
+
+  cartToast.value?.show('カートに追加しました')
+  return returnToItems()
+}
+
+function changeCartQuantity(key, quantity) {
+  saveCart(setCartQuantity(cartLines.value, key, quantity))
+}
+
+function removeCartLine(key) {
+  saveCart(removeCartItem(cartLines.value, key))
+}
+
+function openCart() {
+  cartToast.value?.dismiss()
+  cartDrawer.value?.open()
 }
 
 async function loadCategories() {
@@ -65,12 +134,27 @@ onMounted(loadCategories)
   <section class="menu-panel" aria-labelledby="menu-categories-title">
     <header class="menu-heading">
       <h1 id="menu-categories-title" ref="heading" tabindex="-1">
-        {{ selectedCategory?.name ?? 'カテゴリーを選択' }}
+        {{ selectedItem?.name ?? selectedCategory?.name ?? 'カテゴリーを選択' }}
       </h1>
-      <p v-if="!selectedCategory">お好きなカテゴリーをタッチしてください。</p>
+      <template v-if="selectedItem">
+        <p v-if="selectedItem.option_groups.length">お好みのトッピングを選んでください。</p>
+      </template>
+      <p v-else-if="selectedCategory">商品をタッチして選んでください。</p>
+      <p v-else>お好きなカテゴリーをタッチしてください。</p>
     </header>
 
-    <p v-if="selectedCategory" class="category-state status-message">商品一覧は準備中です。</p>
+    <MenuItemOptions v-if="selectedItem" v-model="selectedOptions" :item="selectedItem" />
+
+    <MenuItemsList
+      v-if="selectedCategory"
+      v-show="!selectedItem"
+      :key="selectedCategory.menu_category_id"
+      :device-uuid="deviceUuid"
+      :category-id="selectedCategory.menu_category_id"
+      :visit-session-id="visitSessionId"
+      @unavailable="refreshCategoriesOnReturn = true"
+      @select-item="selectItem"
+    />
 
     <div v-show="!selectedCategory" class="category-list">
       <div v-if="loading" class="category-state" role="status">カテゴリーを読み込んでいます。</div>
@@ -105,33 +189,118 @@ onMounted(loadCategories)
 
     <p v-if="returnError" class="status-message status-message--error return-error" role="alert">{{ returnError }}</p>
     <footer class="menu-footer">
-      <p class="payment-label">
+      <p v-if="selectedItem" class="footer-info" role="status" aria-atomic="true">
+        <span>小計</span>
+        <strong>{{ formatMenuAmount(subtotal) }} {{ selectedItem.token_symbol }}</strong>
+      </p>
+      <p v-else class="footer-info">
         <span>お支払い方法</span>
         <strong>{{ paymentLabel }}</strong>
       </p>
-      <button v-if="selectedCategory" class="button button--primary footer-action" type="button" @click="returnToCategories">
-        カテゴリー一覧へ戻る
-      </button>
-      <button
-        v-else
-        class="button button--secondary footer-action"
-        type="button"
-        :disabled="returning"
-        @click="$emit('return-to-payment')"
-      >
-        お支払い方法を変更
-      </button>
+      <div class="footer-actions">
+        <button v-if="selectedItem" class="button button--secondary footer-action" type="button" @click="returnToItems">
+          商品一覧へ戻る
+        </button>
+        <button v-else-if="selectedCategory" class="button button--secondary footer-action" type="button" @click="returnToCategories">
+          カテゴリー一覧へ戻る
+        </button>
+        <button
+          v-else
+          class="button button--secondary footer-action"
+          type="button"
+          :disabled="returning"
+          @click="$emit('return-to-payment')"
+        >
+          お支払い方法を変更
+        </button>
+        <button
+          v-if="selectedItem"
+          class="button button--primary footer-action add-to-cart"
+          type="button"
+          :disabled="!canAddToCart"
+          @click="addSelectedItem"
+        >
+          カートに追加
+        </button>
+      </div>
     </footer>
+
+    <button
+      ref="cartTab"
+      class="button cart-tab"
+      type="button"
+      aria-haspopup="dialog"
+      aria-controls="cart-drawer"
+      @click="openCart"
+    >
+      <span class="cart-tab-label">カートを確認</span>
+      <strong>{{ cartQuantity }}点</strong>
+    </button>
+
+    <CartDrawer
+      ref="cartDrawer"
+      :lines="cartLines"
+      :quantity="cartQuantity"
+      :totals="cartAmounts"
+      @change-quantity="changeCartQuantity"
+      @remove="removeCartLine"
+      @close="cartTab?.focus({ preventScroll: true })"
+    />
+
+    <ToastMessage ref="cartToast" class="cart-toast" />
   </section>
 </template>
 
 <style scoped>
 .menu-panel {
+  --cart-tab-width: 3.5rem;
   display: flex;
   flex: 1;
   flex-direction: column;
   gap: clamp(1rem, 2vw, 1.25rem);
   min-inline-size: 0;
+  padding-inline-end: max(0px, var(--cart-tab-width) + .625rem - var(--workspace-gutter));
+}
+
+.cart-tab {
+  position: fixed;
+  z-index: 2;
+  inset-block-start: 40%;
+  inset-inline-end: 0;
+  display: grid;
+  inline-size: var(--cart-tab-width);
+  justify-content: stretch;
+  gap: .3rem;
+  padding: .65rem .3rem;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: .85rem 0 0 .85rem;
+  color: var(--color-on-accent);
+  background: var(--color-accent);
+  box-shadow: -2px 3px 8px #342b1826;
+  font-size: .875rem;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.cart-tab-label {
+  justify-self: center;
+  writing-mode: vertical-rl;
+  letter-spacing: .08em;
+}
+
+.cart-tab strong {
+  padding: .18rem .2rem;
+  overflow-wrap: anywhere;
+  border-radius: .5rem;
+  color: var(--color-accent-hover);
+  background: var(--color-brass-light);
+  font-variant-numeric: tabular-nums;
+}
+
+.cart-tab:focus-visible {
+  outline-color: var(--color-brass-light);
+  outline-offset: -4px;
 }
 
 .menu-heading h1 {
@@ -279,32 +448,50 @@ onMounted(loadCategories)
   box-shadow: 0 -3px 12px #342b1812;
 }
 
-.payment-label {
+.footer-info {
   display: grid;
   margin: 0;
+  overflow-wrap: anywhere;
   line-height: 1.4;
 }
 
-.payment-label span {
+.footer-info span {
   color: var(--color-text-secondary);
   font-size: .85rem;
 }
 
-.payment-label strong {
+.footer-info strong {
   font-size: 1.075rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.footer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: .5rem;
+  max-inline-size: 100%;
+  margin-inline-start: auto;
 }
 
 .footer-action {
   inline-size: auto;
   max-inline-size: 100%;
-  margin-inline-start: auto;
   padding-inline: clamp(.55rem, 2.5vw, 1.2rem);
   font-size: .95rem;
+}
+
+.add-to-cart:disabled {
+  cursor: default;
 }
 
 @media (hover: hover) {
   .category-card:hover {
     border-color: var(--color-accent);
+  }
+
+  .cart-tab:hover {
+    background: var(--color-accent-hover);
   }
 }
 
@@ -323,6 +510,12 @@ onMounted(loadCategories)
 @media (min-width: 66rem) {
   .category-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 80rem) {
+  .menu-panel {
+    padding-inline-end: 0;
   }
 }
 </style>

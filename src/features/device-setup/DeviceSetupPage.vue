@@ -76,7 +76,8 @@ async function retrySetup() {
 
 .terminal-bar-inner,
 .workspace {
-  inline-size: min(68rem, 100% - clamp(1.5rem, 7vw, 6rem));
+  --workspace-gutter: clamp(.75rem, 3.5vw, 3rem);
+  inline-size: min(68rem, 100% - 2 * var(--workspace-gutter));
   margin-inline: auto;
 }
 

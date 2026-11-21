@@ -1,15 +1,17 @@
 # teraid-pay-web-order
 
-店舗に設置する注文端末向けの Vue 3 フロントエンドです。別途稼働する teraid-pay-api で端末を有効化・認証し、来店セッションを開始してメニューカテゴリーを表示します。
+店舗に設置する注文端末向けの Vue 3 フロントエンドです。別途稼働する teraid-pay-api で端末を有効化・認証し、来店セッションを開始してカテゴリーと商品を表示します。
 
 ## ローカルで開発
 
-Node.js 22.12 以降と、起動済みの teraid-pay-api が必要です。Vite が表示するローカル URL を開きます。
+Node.js 22.12 以降と、起動済みの teraid-pay-api が必要です。
 
 ~~~powershell
 npm ci --ignore-scripts
 npm run dev
 ~~~
+
+開発サーバーを起動したまま [http://localhost:4173/](http://localhost:4173/) を開きます。Vue や CSS を保存すると、Vite が開いている画面に変更を反映します。以前から開いていたプレビューのタブは、開発サーバーに切り替えた直後に一度再読み込みしてください。
 
 開発サーバーとプレビューは、端末 API のリクエストを `.env` の `TERAID_PAY_API_TARGET` に転送します。環境ごとに接続先を変える場合は、Git の管理対象外の `.env.local` か、Vite を起動するプロセスの環境変数に同じ項目を設定してください。
 
@@ -29,7 +31,10 @@ npm run dev
 
 1. 待機画面で「注文する」を押します。
 2. 「一括決済」または「注文ごとの決済」を選ぶと、端末認証付きで `POST /device/visit-sessions` を呼び出します。
-3. 開始に成功すると、`GET /device/menu/categories?visit_session_id=...` で店舗のカテゴリーを取得し、お支払い方法とともに表示します。カテゴリーを押すと選択したカテゴリー名が表示され、「カテゴリー一覧へ戻る」で選び直せます。商品一覧の表示は今後の API 連携範囲です。
+3. 開始に成功すると、`GET /device/menu/categories?visit_session_id=...` で店舗のカテゴリーを取得し、お支払い方法とともに表示します。
+4. カテゴリーを押すと、`GET /device/menu/categories/{menu_category_id}/items?visit_session_id=...` で販売中の商品を取得し、画像と基本価格を表示します。
+5. 商品を押すと、トッピングの選択画面に進みます。トッピングを選ぶと追加料金を小計に反映し、必要な選択がそろうと「カートに追加」を押せます。追加後は「カートに追加しました」と短く表示し、同じカテゴリーの商品一覧へ戻ります。
+6. 画面右端の「カートを確認」を押すと、閲覧中のメニューの上にカートが開きます。商品、トッピング、数量、合計を確認でき、数量も変更できます。明細は確認ダイアログで「削除する」を押すと削除され、画面上部に「カートから削除しました」と短く表示されます。同じタブで再読み込みすると、来店セッションに対応するカートを復元します。注文確定は今後の API 連携範囲です。
 
 開始要求IDと決済方式を送信前にブラウザーへ保存します。応答を受け取れない場合は「再試行」で同じ開始要求IDを再送でき、ページ再読み込み後も再試行できます。開始完了後は、決済方式をセッションIDに紐づけて保存します。再読み込み時は保存済みのセッションIDと決済方式を復元し、カテゴリーを取得し直します。現在のセッションをサーバーと照合する機能は今後の API 連携範囲です。
 
@@ -48,7 +53,8 @@ npm run dev
 | src/features/device-auth/api/ | トークン発行 API |
 | src/features/device-auth/services/ | トークンの取得、キャッシュ、更新 |
 | src/features/visit-session/ | 注文待機画面、決済方式の選択、来店セッション開始と保存 |
-| src/features/menu-categories/ | メニューカテゴリーの取得、表示、選択 |
+| src/features/menu-categories/ | メニューカテゴリーと商品の選択、トッピングの選択と小計表示 |
+| src/features/cart/ | 選択した商品、数量、合計の表示とタブ内の保存 |
 | src/shared/device-registration/ | 両機能が使う認証情報の形式、暗号化、IndexedDB 保存 |
 | src/components/api/ | JSON 通信、タイムアウト、HTTP エラーの共通処理 |
 | src/styles/ | 共通スタイル |
@@ -68,7 +74,9 @@ npm run build
 npm run preview
 ~~~
 
-ビルド結果は dist/ に出力されます。本番では、HTTPS の同一オリジンから dist/ を配信し、`POST /device/activate`、`POST /device/auth/token`、`POST /device/visit-sessions`、`GET /device/menu/categories` を teraid-pay-api へ転送します。転送時はパス、クエリ、リクエスト本文、`Authorization` ヘッダー、レスポンスのステータスと `Cache-Control` ヘッダーを維持してください。カテゴリー画像は、API が返す署名付き URL からブラウザーが取得します。本番では HTTPS の画像 URL を返すよう API を構成してください。ブラウザーでは JavaScript、サイトデータの保存、Web Crypto、Web Locks が利用できる必要があります。端末の登録と認証は配信元のオリジンに紐づきます。
+`npm run preview` は [http://localhost:4174/](http://localhost:4174/) でビルド済みの画面を確認するときに使います。
+
+ビルド結果は dist/ に出力されます。本番では、HTTPS の同一オリジンから dist/ を配信し、`POST /device/activate`、`POST /device/auth/token`、`POST /device/visit-sessions`、`GET /device/menu/categories`、`GET /device/menu/categories/{menu_category_id}/items` を teraid-pay-api へ転送します。転送時はパス、クエリ、リクエスト本文、`Authorization` ヘッダー、レスポンスのステータスと `Cache-Control` ヘッダーを維持してください。カテゴリー画像と商品画像は、API が返す署名付き URL からブラウザーが取得します。本番では HTTPS の画像 URL を返すよう API を構成してください。ブラウザーでは JavaScript、サイトデータの保存、Web Crypto、Web Locks が利用できる必要があります。端末の登録と認証は配信元のオリジンに紐づきます。
 
 ## 初期設定画面のレイアウト
 

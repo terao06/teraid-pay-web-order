@@ -12,22 +12,24 @@ test('proxies visit session starts from development and preview origins', () => 
   assert.deepEqual(config.preview.proxy[route], config.server.proxy[route])
 })
 
-test('proxies category list queries from development and preview origins', () => {
+test('proxies category and item list queries from development and preview origins', () => {
   const config = viteConfig({ mode: 'development' })
   const findRoute = (proxy, path) => Object.keys(proxy).find((route) => new RegExp(route).test(path))
 
   for (const { proxy } of [config.server, config.preview]) {
-    const route = findRoute(proxy, '/device/menu/categories?visit_session_id=123')
-    assert.equal(proxy[route]?.changeOrigin, true)
-    assert.equal(findRoute(proxy, '/device/menu/categories/7/items?visit_session_id=123'), undefined)
+    for (const path of ['/device/menu/categories', '/device/menu/categories/7/items']) {
+      const route = findRoute(proxy, `${path}?visit_session_id=123`)
+      assert.equal(proxy[route]?.changeOrigin, true)
+    }
+    assert.equal(findRoute(proxy, '/device/menu/categories/7/items/12'), undefined)
   }
 })
 
-test('allows signed category images from HTTPS and the local API image host', () => {
+test('allows signed menu images from HTTPS and the local API image host', () => {
   assert.ok(indexHtml.includes('img-src https: http://localhost:9002;'))
 })
 
-test('allows Vite-injected styles using a nonce that matches the development CSP', () => {
+test('allows Vite-injected styles and hot updates on both loopback addresses', () => {
   const config = viteConfig({ mode: 'development' })
   const plugin = config.plugins.find(({ name }) => name === 'local-dev-csp')
   const server = { httpServer: { address: () => ({ port: 5174 }) } }
@@ -39,7 +41,7 @@ test('allows Vite-injected styles using a nonce that matches the development CSP
 
   assert.match(nonce, /^[a-z\d+/]{22}==$/i)
   assert.ok(first.html.includes("style-src 'self' 'nonce-" + nonce + "';"))
-  assert.ok(first.html.includes("connect-src 'self' ws://127.0.0.1:5174;"))
+  assert.ok(first.html.includes("connect-src 'self' ws://127.0.0.1:5174 ws://localhost:5174;"))
   assert.ok(first.html.includes("script-src 'self';"))
   assert.doesNotMatch(first.html, /unsafe-inline/)
   assert.notEqual(transform().tags[0].attrs.nonce, nonce)
