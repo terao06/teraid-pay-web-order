@@ -1,7 +1,12 @@
+import { isCheckoutState, isId } from '../checkout/checkoutState.js'
 import { isPaymentMode } from './paymentModes.js'
 
 const KEY_PREFIX = 'teraid-pay-visit-session:'
 const REQUEST_ID_LENGTH = 64
+
+export function visitSessionStorageKey(deviceUuid) {
+  return KEY_PREFIX + deviceUuid
+}
 
 export class VisitSessionStorageError extends Error {
   constructor() {
@@ -12,7 +17,7 @@ export class VisitSessionStorageError extends Error {
 
 function withStorage(deviceUuid, work) {
   try {
-    return work(globalThis.localStorage, KEY_PREFIX + deviceUuid)
+    return work(globalThis.localStorage, visitSessionStorageKey(deviceUuid))
   } catch {
     throw new VisitSessionStorageError()
   }
@@ -33,7 +38,11 @@ export const visitSessionStore = {
         || !record.requestId.trim()
         || record.requestId.length > REQUEST_ID_LENGTH
         || !validPaymentMode
-        || (hasSessionId && (!Number.isSafeInteger(record.visitSessionId) || record.visitSessionId < 1))
+        || (hasSessionId && !isId(record.visitSessionId))
+        || (record.checkout !== undefined && (!hasSessionId || !isPaymentMode(record.paymentMode)
+          || !isCheckoutState(record.checkout, record.paymentMode)))
+        || (record.paidOrderIds !== undefined && (!hasSessionId || !Array.isArray(record.paidOrderIds)
+          || !record.paidOrderIds.every(isId)))
       ) {
         throw new VisitSessionStorageError()
       }

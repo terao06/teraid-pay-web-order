@@ -47,6 +47,14 @@ export class CartStorageError extends Error {
 
 export function createCartStore(getStorage = () => globalThis.sessionStorage) {
   return {
+    clear(deviceUuid, visitSessionId) {
+      try {
+        getStorage().removeItem(cartKey(deviceUuid, visitSessionId))
+      } catch {
+        throw new CartStorageError()
+      }
+    },
+
     load(deviceUuid, visitSessionId) {
       let raw
       try {

@@ -41,7 +41,7 @@ export function createVisitSession({ auth, storage, withLock, generateRequestId,
     async resetPaymentMode(deviceUuid) {
       return withLock(deviceUuid, () => {
         const record = storage.load(deviceUuid)
-        if (!record?.visitSessionId || record.paymentMode === null) return record
+        if (!record?.visitSessionId || record.paymentMode === null || record.checkout) return record
         return savePaymentMode(deviceUuid, record, null)
       })
     },

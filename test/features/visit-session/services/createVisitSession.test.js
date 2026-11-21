@@ -98,6 +98,15 @@ test('serializes starts in separate tabs and keeps the first completed choice', 
   assert.deepEqual(calls, [['request-1', token]])
 })
 
+test('keeps the original payment mode while checkout is in progress', async () => {
+  const { options } = fixture()
+  const session = createVisitSession(options)
+  await session.start(deviceUuid, 'combined')
+  const activeCheckout = { ...started, checkout: { phase: 'create', orderId: null } }
+  options.storage.save(deviceUuid, activeCheckout)
+  assert.deepEqual(await session.resetPaymentMode(deviceUuid), activeCheckout)
+})
+
 test('refreshes rejected authentication once without changing the request ID', async () => {
   const { options, calls } = fixture()
   const refreshed = { ...token, value: 'refreshed-token' }

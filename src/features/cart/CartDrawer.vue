@@ -17,7 +17,7 @@ const props = defineProps({
   sending: { type: Boolean, required: true },
   orderError: { type: String, required: true },
 })
-const emit = defineEmits(['change-quantity', 'remove', 'close', 'confirm', 'continue-ordering'])
+const emit = defineEmits(['change-quantity', 'remove', 'close', 'confirm', 'continue-ordering', 'checkout'])
 const dialog = ref(null)
 const removalToast = ref(null)
 const heading = ref(null)
@@ -73,8 +73,6 @@ defineExpose({ open, close })
               <dd>{{ formatMenuAmount(receipt.total_amount) }} {{ receipt.token_symbol }}</dd>
             </div>
           </dl>
-          <p v-if="paymentMode === 'combined'">お会計の際は、店舗スタッフにお声がけください。</p>
-          <p v-else>今回のご注文のお支払いについては、店舗スタッフにお声がけください。</p>
         </section>
         <CartReview
           v-else
@@ -86,7 +84,7 @@ defineExpose({ open, close })
         />
       </div>
 
-      <footer v-if="!receipt || paymentMode === 'combined' || orderError" class="drawer-total">
+      <footer class="drawer-total">
         <CartSummary v-if="!receipt" :quantity="quantity" :totals="totals" />
         <p v-if="orderError" ref="orderAlert" class="status-message status-message--error" role="alert" tabindex="-1">{{ orderError }}</p>
         <p v-else-if="sending" class="status-message" role="status">注文を送信しています。</p>
@@ -95,8 +93,14 @@ defineExpose({ open, close })
           1回の注文に異なる通貨の商品が含まれています。カートの内容を調整してください。
         </p>
         <button
-          v-if="receipt && paymentMode === 'combined'"
+          v-if="receipt"
           class="button button--primary"
+          type="button"
+          @click="emit('checkout')"
+        >{{ paymentMode === 'combined' ? 'お会計' : 'お支払いへ進む' }}</button>
+        <button
+          v-if="receipt && paymentMode === 'combined'"
+          class="button button--secondary"
           type="button"
           @click="emit('continue-ordering')"
         >追加注文へ</button>
@@ -218,10 +222,6 @@ h2 {
   font-size: 1.25rem;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
-}
-
-.receipt p {
-  margin-block: 1rem 0;
 }
 
 @media (prefers-reduced-motion: no-preference) {

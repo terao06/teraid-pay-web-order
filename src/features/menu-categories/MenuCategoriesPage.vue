@@ -16,10 +16,11 @@ const props = defineProps({
   deviceUuid: { type: String, required: true },
   visitSessionId: { type: Number, required: true },
   paymentMode: { type: String, required: true },
+  paidOrderIds: { type: Array, default: () => [] },
   returning: { type: Boolean, required: true },
   returnError: { type: String, required: true },
 })
-defineEmits(['return-to-payment'])
+const emit = defineEmits(['return-to-payment', 'checkout', 'confirm-order', 'end-visit'])
 
 const requestErrors = {
   401: '端末を認証できませんでした。店舗スタッフにお声がけください。',
@@ -36,7 +37,7 @@ const selectedItem = ref(null)
 const selectedOptions = ref(new Map())
 const {
   lines: cartLines, pending, receipt, locked, mixedTokens, sending, orderError, changeLines, confirm, continueOrdering,
-} = useCartOrder(props.deviceUuid, props.visitSessionId)
+} = useCartOrder(props.deviceUuid, props.visitSessionId, { paidOrderIds: props.paidOrderIds })
 const cartToast = ref(null)
 const failedImages = ref(new Set())
 const loading = ref(true)
@@ -52,6 +53,8 @@ const canAddToCart = computed(() => !locked.value && selectedItem.value
   && hasValidMenuOptions(selectedItem.value, selectedOptions.value))
 const cartQuantity = computed(() => cartLines.value.reduce((total, line) => total + line.quantity, 0))
 const cartAmounts = computed(() => cartTotals(cartLines.value))
+const canStartCheckout = computed(() => !props.returning && (!locked.value || Boolean(receipt.value))
+  && !cartLines.value.length)
 
 function focusHeading() {
   heading.value?.focus()
@@ -131,9 +134,29 @@ function addAnotherOrder() {
   cartDrawer.value?.close()
 }
 
+function startCheckout() {
+  if (!canStartCheckout.value) return
+  const orderId = props.paymentMode === 'combined' ? null : receipt.value?.menu_order_id
+  if (orderId === undefined) return
+  cartDrawer.value?.close()
+  emit('checkout', orderId)
+}
+
+function confirmOrder() {
+  emit('confirm-order', {
+    paymentMode: props.paymentMode,
+    async confirm() {
+      await confirm()
+      if (props.paymentMode === 'per_order' && receipt.value) cartDrawer.value?.close()
+      return receipt.value?.menu_order_id
+    },
+  })
+}
+
 onMounted(() => {
   loadCategories()
-  if (locked.value) openCart()
+  if (props.paymentMode === 'per_order' && receipt.value && !props.returnError) startCheckout()
+  else if (locked.value) openCart()
 })
 </script>
 
@@ -221,6 +244,20 @@ onMounted(() => {
           お支払い方法を変更
         </button>
         <button
+          v-if="!selectedItem && paymentMode === 'combined'"
+          class="button button--primary footer-action"
+          type="button"
+          :disabled="!canStartCheckout"
+          @click="startCheckout"
+        >お会計</button>
+        <button
+          v-if="!selectedItem && paymentMode === 'per_order' && !locked"
+          class="button button--secondary footer-action"
+          type="button"
+          :disabled="!canStartCheckout"
+          @click="emit('end-visit')"
+        >注文を終了</button>
+        <button
           v-if="selectedItem"
           class="button button--primary footer-action add-to-cart"
           type="button"
@@ -256,7 +293,8 @@ onMounted(() => {
       :mixed-tokens="mixedTokens"
       :sending="sending"
       :order-error="orderError"
-      @confirm="confirm"
+      @confirm="confirmOrder"
+      @checkout="startCheckout"
       @continue-ordering="addAnotherOrder"
       @change-quantity="changeCartQuantity"
       @remove="removeCartLine"

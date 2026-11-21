@@ -59,3 +59,17 @@ test('reports damaged data and inaccessible browser storage', (t) => {
   storage.setItem = () => { throw new Error('Quota exceeded') }
   assert.throws(() => visitSessionStore.save('test-device', {}), VisitSessionStorageError)
 })
+
+test('restores checkout state only when its visit and payment mode match', (t) => {
+  mockStorage(t)
+  const record = {
+    requestId: 'request-1', paymentMode: 'per_order', visitSessionId: 123,
+    checkout: { phase: 'create', orderId: 456 },
+  }
+  visitSessionStore.save('device', record)
+  assert.deepEqual(visitSessionStore.load('device'), record)
+  visitSessionStore.save('device', { ...record, paymentMode: 'combined' })
+  assert.throws(() => visitSessionStore.load('device'), VisitSessionStorageError)
+  visitSessionStore.save('device', { ...record, paymentMode: null })
+  assert.throws(() => visitSessionStore.load('device'), VisitSessionStorageError)
+})

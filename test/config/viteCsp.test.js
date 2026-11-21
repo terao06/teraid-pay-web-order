@@ -41,6 +41,20 @@ test('allows signed menu images from HTTPS and the local API image host', () => 
   assert.ok(indexHtml.includes('img-src https: http://localhost:9002;'))
 })
 
+test('proxies all four payment and session completion routes in development and preview', () => {
+  const config = viteConfig({ mode: 'development' })
+  for (const { proxy } of [config.server, config.preview]) {
+    for (const path of [
+      '/device/visit-sessions/123/checkouts', '/device/checkouts/45/payments/face',
+      '/device/checkouts/45/payments/67/verify', '/device/visit-sessions/123/complete',
+    ]) {
+      const route = Object.keys(proxy).find((pattern) => new RegExp(pattern).test(path))
+      assert.equal(proxy[route]?.changeOrigin, true)
+    }
+    assert.equal(Object.keys(proxy).some((pattern) => new RegExp(pattern).test('/device/checkouts/x/payments/face')), false)
+  }
+})
+
 test('allows Vite-injected styles and hot updates on both loopback addresses', () => {
   const config = viteConfig({ mode: 'development' })
   const plugin = config.plugins.find(({ name }) => name === 'local-dev-csp')

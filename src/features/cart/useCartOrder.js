@@ -15,6 +15,7 @@ export function useCartOrder(deviceUuid, visitSessionId, {
   storage = cartStore,
   sendOrder = submitOrder,
   generateKey = () => crypto.randomUUID(),
+  paidOrderIds = [],
 } = {}) {
   const cart = ref({ lines: [], pendingKey: null, receipt: null })
   const storageBlocked = ref(false)
@@ -23,6 +24,10 @@ export function useCartOrder(deviceUuid, visitSessionId, {
 
   try {
     cart.value = storage.load(deviceUuid, visitSessionId)
+    if (cart.value.receipt && paidOrderIds.includes(cart.value.receipt.menu_order_id)) {
+      storage.clear(deviceUuid, visitSessionId)
+      cart.value = { lines: [], pendingKey: null, receipt: null }
+    }
   } catch {
     storageBlocked.value = true
     orderError.value = '注文情報を読み込めませんでした。店舗スタッフにお声がけください。'

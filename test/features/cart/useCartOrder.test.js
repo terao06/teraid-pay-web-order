@@ -21,13 +21,25 @@ function setup(sendOrder) {
     removeItem: () => { raw = null },
   }))
   let nextKey = 0
-  const openCart = () => useCartOrder(deviceUuid, visitId, {
+  const openCart = (paidOrderIds) => useCartOrder(deviceUuid, visitId, {
     storage,
     sendOrder,
     generateKey: () => `order-key-${++nextKey}`,
+    paidOrderIds,
   })
   return { storage, openCart, blockWrites: (value) => { writeBlocked = value } }
 }
+
+test('clears a paid receipt when returning to the same visit for additional orders', async () => {
+  const { openCart, storage } = setup(async () => receipt)
+  const cart = openCart()
+  cart.changeLines([line])
+  await cart.confirm()
+  const nextCart = openCart([receipt.menu_order_id])
+  assert.equal(nextCart.locked.value, false)
+  assert.equal(nextCart.receipt.value, null)
+  assert.equal(storage.load(deviceUuid, visitId).receipt, null)
+})
 
 test('saves the order before sending and prevents duplicate submits and edits in flight', async () => {
   let respond

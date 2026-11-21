@@ -1,10 +1,12 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ApiError } from '../../components/api/apiClient.js'
+import CheckoutPage from '../checkout/CheckoutPage.vue'
+import { useCheckoutFlow } from '../checkout/useCheckoutFlow.js'
 import MenuCategoriesPage from '../menu-categories/MenuCategoriesPage.vue'
 import { PAYMENT_MODE_LABELS } from './paymentModes.js'
 import { visitSession } from './visitSession.js'
-import { VisitSessionStorageError } from './visitSessionStore.js'
+import { visitSessionStorageKey, VisitSessionStorageError } from './visitSessionStore.js'
 
 const props = defineProps({
   deviceUuid: { type: String, required: true },
@@ -37,6 +39,7 @@ const heading = ref(null)
 const sessionStarted = computed(() => Boolean(record.value?.visitSessionId))
 const screen = computed(() => {
   if (storageUnavailable.value) return 'unavailable'
+  if (record.value?.checkout) return 'checkout'
   if (sessionStarted.value && record.value.paymentMode) return 'started'
   if (record.value && !sessionStarted.value) return 'pending'
   return choosing.value ? 'select' : 'welcome'
@@ -101,21 +104,43 @@ function focusHeading() {
   heading.value?.focus()
 }
 
+function syncSession(event) {
+  if (event.key === null || event.key === visitSessionStorageKey(props.deviceUuid)) restore()
+}
+
 restore()
-onMounted(focusHeading)
+const { run: runCheckout, busy: checkoutBusy, message: checkoutMessage } = useCheckoutFlow(props.deviceUuid, record, restore)
+onMounted(() => {
+  focusHeading()
+  window.addEventListener('storage', syncSession)
+})
+onUnmounted(() => window.removeEventListener('storage', syncSession))
 watch(screen, focusHeading, { flush: 'post' })
 </script>
 
 <template>
+  <CheckoutPage
+    v-if="screen === 'checkout'"
+    :key="record.visitSessionId"
+    :checkout="record.checkout"
+    :payment-mode="record.paymentMode"
+    :busy="checkoutBusy"
+    :message="checkoutMessage"
+    @action="runCheckout"
+  />
   <MenuCategoriesPage
-    v-if="screen === 'started'"
+    v-else-if="screen === 'started'"
     :key="record.visitSessionId"
     :device-uuid="deviceUuid"
     :visit-session-id="record.visitSessionId"
     :payment-mode="record.paymentMode"
-    :returning="busy"
-    :return-error="errorMessage"
+    :paid-order-ids="record.paidOrderIds"
+    :returning="busy || checkoutBusy"
+    :return-error="errorMessage || checkoutMessage"
     @return-to-payment="resetPaymentMode"
+    @confirm-order="runCheckout('order', $event)"
+    @checkout="runCheckout('begin', $event)"
+    @end-visit="runCheckout('end')"
   />
   <section v-else class="visit-panel" aria-labelledby="visit-title">
     <h1 id="visit-title" ref="heading" tabindex="-1">{{ titles[screen] }}</h1>
