@@ -1,0 +1,94 @@
+:root {
+  color-scheme: light;
+  font-family: system-ui, "Yu Gothic UI", "Hiragino Kaku Gothic ProN", sans-serif;
+  line-height: 1.6;
+  font-synthesis: none;
+  color: var(--color-text);
+  background: var(--color-background);
+
+  --color-text: #242b23;
+  --color-text-secondary: #565d51;
+  --color-background: #f2f1e9;
+  --color-surface: #fcfaf5;
+  --color-input-surface: #fffdf8;
+  --color-success-surface: #e3eddf;
+  --color-panel-border: #dfd7c8;
+  --color-control-border: #968975;
+  --color-secondary-border: #a99e8b;
+  --color-accent: #254b36;
+  --color-accent-hover: #1b3929;
+  --color-on-accent: #fff9ed;
+  --color-brass-light: #e5bb88;
+  --color-focus: #815c30;
+  --color-error: #872820;
+  --color-error-surface: #faeee7;
+  --color-error-border: #e7c5b9;
+  --control-min-height: 3.5rem;
+  --control-radius: .75rem;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 3px;
+}
+
+.button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .65rem;
+  inline-size: 100%;
+  min-block-size: var(--control-min-height);
+  padding: .75rem 1rem;
+  border: 1px solid transparent;
+  border-radius: var(--control-radius);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.button:disabled {
+  cursor: wait;
+  opacity: .65;
+}
+
+.button--primary {
+  color: var(--color-on-accent);
+  background: var(--color-accent);
+}
+
+.button--primary:not(:disabled):hover {
+  background: var(--color-accent-hover);
+}
+
+.button--secondary {
+  color: var(--color-accent);
+  border-color: var(--color-secondary-border);
+  background: var(--color-input-surface);
+}
+
+.button--secondary:not(:disabled):hover {
+  background: var(--color-background);
+}
+
+.status-message {
+  margin: .75rem 0 0;
+  line-height: 1.65;
+}
+
+.status-message--error {
+  padding: .75rem .9rem;
+  border: 1px solid var(--color-error-border);
+  border-radius: var(--control-radius);
+  color: var(--color-error);
+  background: var(--color-error-surface);
+}
