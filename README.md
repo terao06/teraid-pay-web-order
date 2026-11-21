@@ -1,6 +1,6 @@
 # teraid-pay-web-order
 
-店舗に設置する注文端末向けの Vue 3 フロントエンドです。別途稼働する teraid-pay-api で端末を有効化・認証し、来店セッションを開始します。
+店舗に設置する注文端末向けの Vue 3 フロントエンドです。別途稼働する teraid-pay-api で端末を有効化・認証し、来店セッションを開始してメニューカテゴリーを表示します。
 
 ## ローカルで開発
 
@@ -12,6 +12,8 @@ npm run dev
 ~~~
 
 開発サーバーとプレビューは、端末 API のリクエストを `.env` の `TERAID_PAY_API_TARGET` に転送します。環境ごとに接続先を変える場合は、Git の管理対象外の `.env.local` か、Vite を起動するプロセスの環境変数に同じ項目を設定してください。
+
+プレビュー起動後に API の転送設定や接続先を変更した場合は、`npm run preview` を再起動して設定を読み込み直してください。
 
 ## 注文端末の初期設定
 
@@ -27,9 +29,9 @@ npm run dev
 
 1. 待機画面で「注文する」を押します。
 2. 「一括決済」または「注文ごとの決済」を選ぶと、端末認証付きで `POST /device/visit-sessions` を呼び出します。
-3. 開始に成功すると、開始完了と選択したお支払い方法が表示されます。
+3. 開始に成功すると、`GET /device/menu/categories?visit_session_id=...` で店舗のカテゴリーを取得し、お支払い方法とともに表示します。カテゴリーを押すと選択したカテゴリー名が表示され、「カテゴリー一覧へ戻る」で選び直せます。商品一覧の表示は今後の API 連携範囲です。
 
-開始要求IDと決済方式を送信前にブラウザーへ保存します。応答を受け取れない場合は「再試行」で同じ開始要求IDを再送でき、ページ再読み込み後も再試行できます。開始完了後は、決済方式をセッションIDに紐づけて保存し、再読み込み時に開始結果を復元します。現在のセッションをサーバーと照合する機能と、メニュー表示以降の画面は今後のAPI連携範囲です。
+開始要求IDと決済方式を送信前にブラウザーへ保存します。応答を受け取れない場合は「再試行」で同じ開始要求IDを再送でき、ページ再読み込み後も再試行できます。開始完了後は、決済方式をセッションIDに紐づけて保存します。再読み込み時は保存済みのセッションIDと決済方式を復元し、カテゴリーを取得し直します。現在のセッションをサーバーと照合する機能は今後の API 連携範囲です。
 
 ## ディレクトリ構成
 
@@ -46,6 +48,7 @@ npm run dev
 | src/features/device-auth/api/ | トークン発行 API |
 | src/features/device-auth/services/ | トークンの取得、キャッシュ、更新 |
 | src/features/visit-session/ | 注文待機画面、決済方式の選択、来店セッション開始と保存 |
+| src/features/menu-categories/ | メニューカテゴリーの取得、表示、選択 |
 | src/shared/device-registration/ | 両機能が使う認証情報の形式、暗号化、IndexedDB 保存 |
 | src/components/api/ | JSON 通信、タイムアウト、HTTP エラーの共通処理 |
 | src/styles/ | 共通スタイル |
@@ -65,7 +68,7 @@ npm run build
 npm run preview
 ~~~
 
-ビルド結果は dist/ に出力されます。本番では、HTTPS の同一オリジンから dist/ を配信し、`POST /device/activate`、`POST /device/auth/token`、`POST /device/visit-sessions` を teraid-pay-api へ転送します。転送時はパス、リクエスト本文、`Authorization` ヘッダー、レスポンスのステータスと `Cache-Control` ヘッダーを維持してください。ブラウザーでは JavaScript、サイトデータの保存、Web Crypto、Web Locks が利用できる必要があります。端末の登録と認証は配信元のオリジンに紐づきます。
+ビルド結果は dist/ に出力されます。本番では、HTTPS の同一オリジンから dist/ を配信し、`POST /device/activate`、`POST /device/auth/token`、`POST /device/visit-sessions`、`GET /device/menu/categories` を teraid-pay-api へ転送します。転送時はパス、クエリ、リクエスト本文、`Authorization` ヘッダー、レスポンスのステータスと `Cache-Control` ヘッダーを維持してください。カテゴリー画像は、API が返す署名付き URL からブラウザーが取得します。本番では HTTPS の画像 URL を返すよう API を構成してください。ブラウザーでは JavaScript、サイトデータの保存、Web Crypto、Web Locks が利用できる必要があります。端末の登録と認証は配信元のオリジンに紐づきます。
 
 ## 初期設定画面のレイアウト
 

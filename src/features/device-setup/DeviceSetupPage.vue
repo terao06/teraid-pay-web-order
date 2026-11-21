@@ -35,7 +35,7 @@ async function retrySetup() {
     </div>
   </header>
 
-  <main class="workspace">
+  <main class="workspace" :class="{ 'workspace--ready': phase === SETUP_PHASE.ready }">
     <slot v-if="phase === SETUP_PHASE.ready" :device-uuid="deviceUuid" />
 
     <section v-else-if="showForm" aria-labelledby="setup-title">
@@ -139,6 +139,16 @@ async function retrySetup() {
 
 .workspace {
   padding-block: clamp(1.75rem, 7vh, 4.25rem) 2rem;
+}
+
+.workspace--ready {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+
+.workspace--ready:has(> .menu-panel) {
+  padding-block: clamp(1rem, 3vh, 2rem) clamp(.75rem, 2vh, 1.25rem);
 }
 
 .workspace-heading {

@@ -35,6 +35,12 @@ body {
   margin: 0;
 }
 
+#app {
+  display: flex;
+  flex-direction: column;
+  min-block-size: 100dvh;
+}
+
 :focus-visible {
   outline: 3px solid var(--color-focus);
   outline-offset: 3px;

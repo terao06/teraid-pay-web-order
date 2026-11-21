@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { ApiError } from '../../components/api/apiClient.js'
+import MenuCategoriesPage from '../menu-categories/MenuCategoriesPage.vue'
 import { PAYMENT_MODE_LABELS } from './paymentModes.js'
 import { visitSession } from './visitSession.js'
 import { VisitSessionStorageError } from './visitSessionStore.js'
@@ -13,7 +14,6 @@ const titles = {
   welcome: '注文を開始',
   select: 'お支払い方法を選択',
   pending: '注文を開始',
-  started: '来店セッションを開始しました',
   unavailable: '注文端末の状態を確認してください',
 }
 const paymentDescriptions = {
@@ -107,7 +107,17 @@ watch(screen, focusHeading, { flush: 'post' })
 </script>
 
 <template>
-  <section class="visit-panel" aria-labelledby="visit-title">
+  <MenuCategoriesPage
+    v-if="screen === 'started'"
+    :key="record.visitSessionId"
+    :device-uuid="deviceUuid"
+    :visit-session-id="record.visitSessionId"
+    :payment-label="PAYMENT_MODE_LABELS[record.paymentMode]"
+    :returning="busy"
+    :return-error="errorMessage"
+    @return-to-payment="resetPaymentMode"
+  />
+  <section v-else class="visit-panel" aria-labelledby="visit-title">
     <h1 id="visit-title" ref="heading" tabindex="-1">{{ titles[screen] }}</h1>
 
     <p v-if="screen === 'welcome'" class="visit-description">この端末からお食事をご注文いただけます。</p>
@@ -117,7 +127,7 @@ watch(screen, focusHeading, { flush: 'post' })
     </p>
 
     <p v-if="errorMessage" class="status-message status-message--error" role="alert">{{ errorMessage }}</p>
-    <p v-if="busy && screen !== 'started'" class="status-message" role="status">
+    <p v-if="busy" class="status-message" role="status">
       {{ sessionStarted ? 'お支払い方法を保存しています。' : '注文を開始しています。' }}
     </p>
 
@@ -146,10 +156,6 @@ watch(screen, focusHeading, { flush: 'post' })
 
     <div v-else-if="screen === 'pending'" class="visit-actions">
       <button class="button button--primary" type="button" :disabled="busy" @click="start()">再試行</button>
-    </div>
-
-    <div v-else-if="screen === 'started'" class="visit-actions">
-      <button class="button button--secondary" type="button" :disabled="busy" @click="resetPaymentMode">戻る</button>
     </div>
 
     <div v-else-if="screen === 'unavailable'" class="visit-actions">
