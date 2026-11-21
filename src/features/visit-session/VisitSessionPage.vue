@@ -112,7 +112,7 @@ watch(screen, focusHeading, { flush: 'post' })
     :key="record.visitSessionId"
     :device-uuid="deviceUuid"
     :visit-session-id="record.visitSessionId"
-    :payment-label="PAYMENT_MODE_LABELS[record.paymentMode]"
+    :payment-mode="record.paymentMode"
     :returning="busy"
     :return-error="errorMessage"
     @return-to-payment="resetPaymentMode"

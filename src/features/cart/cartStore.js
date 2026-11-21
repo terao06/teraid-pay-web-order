@@ -1,3 +1,4 @@
+import { isOrderReceipt } from '../order/orderReceipt.js'
 import { MAX_CART_QUANTITY } from './cart.js'
 
 function cartKey(deviceUuid, visitSessionId) {
@@ -32,29 +33,50 @@ function isLine(line) {
     && line.options.every(isOption)
 }
 
+function isCart(lines) {
+  return Array.isArray(lines) && lines.every(isLine)
+    && new Set(lines.map(({ key }) => key)).size === lines.length
+}
+
+export class CartStorageError extends Error {
+  constructor() {
+    super('Cart storage unavailable')
+    this.name = 'CartStorageError'
+  }
+}
+
 export function createCartStore(getStorage = () => globalThis.sessionStorage) {
   return {
     load(deviceUuid, visitSessionId) {
+      let raw
       try {
-        const raw = getStorage().getItem(cartKey(deviceUuid, visitSessionId))
-        if (raw === null) return []
-        const lines = JSON.parse(raw)
-        if (!Array.isArray(lines) || !lines.every(isLine)) return []
-        if (new Set(lines.map(({ key }) => key)).size !== lines.length) return []
-        return lines
+        raw = JSON.parse(getStorage().getItem(cartKey(deviceUuid, visitSessionId)))
       } catch {
-        return []
+        return { lines: [], pendingKey: null, receipt: null }
       }
+
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        const { lines, pendingKey, receipt } = raw
+        // Preserve a pending order until the API has confirmed its outcome.
+        const hasPendingOrder = lines?.length > 0 && receipt === null
+          && typeof pendingKey === 'string' && pendingKey.length <= 64 && pendingKey.trim()
+        const hasReceipt = lines?.length === 0 && pendingKey === null && isOrderReceipt(receipt)
+        if (isCart(lines) && (hasPendingOrder || hasReceipt)) return { lines, pendingKey, receipt }
+        throw new CartStorageError()
+      }
+
+      return { lines: isCart(raw) ? raw : [], pendingKey: null, receipt: null }
     },
 
-    save(deviceUuid, visitSessionId, lines) {
+    save(deviceUuid, visitSessionId, { lines, pendingKey, receipt }) {
       try {
         const storage = getStorage()
         const key = cartKey(deviceUuid, visitSessionId)
-        if (lines.length) storage.setItem(key, JSON.stringify(lines))
+        if (pendingKey || receipt) storage.setItem(key, JSON.stringify({ lines, pendingKey, receipt }))
+        else if (lines.length) storage.setItem(key, JSON.stringify(lines))
         else storage.removeItem(key)
       } catch {
-        // The in-memory cart remains usable if browser storage is unavailable.
+        throw new CartStorageError()
       }
     },
   }

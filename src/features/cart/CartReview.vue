@@ -4,7 +4,10 @@ import ModalDialog from '../../components/feedback/ModalDialog.vue'
 import { formatMenuAmount } from '../menu-categories/menuItemLabels.js'
 import { cartLineAmount, MAX_CART_QUANTITY } from './cart.js'
 
-defineProps({ lines: { type: Array, required: true } })
+const props = defineProps({
+  lines: { type: Array, required: true },
+  locked: { type: Boolean, required: true },
+})
 const emit = defineEmits(['change-quantity', 'remove', 'removed'])
 const emptyMessage = ref(null)
 const confirmation = ref(null)
@@ -12,7 +15,7 @@ const pendingLine = ref(null)
 let removeButton
 
 async function requestRemoval(line, event) {
-  if (pendingLine.value) return
+  if (props.locked || pendingLine.value) return
   removeButton = event.currentTarget
   pendingLine.value = line
   await nextTick()
@@ -67,7 +70,7 @@ async function confirmRemoval() {
               type="button"
               class="button button--secondary quantity-button"
               :aria-label="`${line.name}を1点減らす`"
-              :disabled="line.quantity === 1"
+              :disabled="locked || line.quantity === 1"
               @click="emit('change-quantity', line.key, line.quantity - 1)"
             >−</button>
             <span class="quantity-value">{{ line.quantity }}</span>
@@ -75,7 +78,7 @@ async function confirmRemoval() {
               type="button"
               class="button button--secondary quantity-button"
               :aria-label="`${line.name}を1点増やす`"
-              :disabled="line.quantity === MAX_CART_QUANTITY"
+              :disabled="locked || line.quantity === MAX_CART_QUANTITY"
               @click="emit('change-quantity', line.key, line.quantity + 1)"
             >＋</button>
           </div>
@@ -83,6 +86,7 @@ async function confirmRemoval() {
             type="button"
             class="button button--secondary remove-action"
             :aria-label="`${line.name}をカートから削除`"
+            :disabled="locked"
             aria-haspopup="dialog"
             aria-controls="cart-remove-dialog"
             @click="requestRemoval(line, $event)"

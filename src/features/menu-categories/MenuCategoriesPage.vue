@@ -4,7 +4,8 @@ import { ApiError } from '../../components/api/apiClient.js'
 import ToastMessage from '../../components/feedback/ToastMessage.vue'
 import CartDrawer from '../cart/CartDrawer.vue'
 import { addCartItem, cartTotals, removeCartItem, setCartQuantity } from '../cart/cart.js'
-import { cartStore } from '../cart/cartStore.js'
+import { useCartOrder } from '../cart/useCartOrder.js'
+import { PAYMENT_MODE_LABELS } from '../visit-session/paymentModes.js'
 import MenuItemOptions from './MenuItemOptions.vue'
 import MenuItemsList from './MenuItemsList.vue'
 import { loadMenuCategories } from './menuCategories.js'
@@ -14,7 +15,7 @@ import { calculateMenuSubtotal, hasValidMenuOptions } from './menuItemSelection.
 const props = defineProps({
   deviceUuid: { type: String, required: true },
   visitSessionId: { type: Number, required: true },
-  paymentLabel: { type: String, required: true },
+  paymentMode: { type: String, required: true },
   returning: { type: Boolean, required: true },
   returnError: { type: String, required: true },
 })
@@ -33,7 +34,9 @@ const categories = ref([])
 const selectedCategory = ref(null)
 const selectedItem = ref(null)
 const selectedOptions = ref(new Map())
-const cartLines = ref(cartStore.load(props.deviceUuid, props.visitSessionId))
+const {
+  lines: cartLines, pending, receipt, locked, mixedTokens, sending, orderError, changeLines, confirm, continueOrdering,
+} = useCartOrder(props.deviceUuid, props.visitSessionId)
 const cartToast = ref(null)
 const failedImages = ref(new Set())
 const loading = ref(true)
@@ -45,7 +48,8 @@ let refreshCategoriesOnReturn = false
 const subtotal = computed(() => selectedItem.value
   ? calculateMenuSubtotal(selectedItem.value, selectedOptions.value)
   : null)
-const canAddToCart = computed(() => selectedItem.value && hasValidMenuOptions(selectedItem.value, selectedOptions.value))
+const canAddToCart = computed(() => !locked.value && selectedItem.value
+  && hasValidMenuOptions(selectedItem.value, selectedOptions.value))
 const cartQuantity = computed(() => cartLines.value.reduce((total, line) => total + line.quantity, 0))
 const cartAmounts = computed(() => cartTotals(cartLines.value))
 
@@ -84,27 +88,22 @@ async function returnToItems() {
   itemButton?.focus()
 }
 
-function saveCart(lines) {
-  cartLines.value = lines
-  cartStore.save(props.deviceUuid, props.visitSessionId, lines)
-}
-
 function addSelectedItem() {
   if (!canAddToCart.value) return
   const lines = addCartItem(cartLines.value, selectedItem.value, selectedOptions.value)
   if (lines === cartLines.value) return
-  saveCart(lines)
+  changeLines(lines)
 
   cartToast.value?.show('カートに追加しました')
   return returnToItems()
 }
 
 function changeCartQuantity(key, quantity) {
-  saveCart(setCartQuantity(cartLines.value, key, quantity))
+  changeLines(setCartQuantity(cartLines.value, key, quantity))
 }
 
 function removeCartLine(key) {
-  saveCart(removeCartItem(cartLines.value, key))
+  changeLines(removeCartItem(cartLines.value, key))
 }
 
 function openCart() {
@@ -127,7 +126,15 @@ async function loadCategories() {
   }
 }
 
-onMounted(loadCategories)
+function addAnotherOrder() {
+  if (props.paymentMode !== 'combined' || !continueOrdering()) return
+  cartDrawer.value?.close()
+}
+
+onMounted(() => {
+  loadCategories()
+  if (locked.value) openCart()
+})
 </script>
 
 <template>
@@ -195,7 +202,7 @@ onMounted(loadCategories)
       </p>
       <p v-else class="footer-info">
         <span>お支払い方法</span>
-        <strong>{{ paymentLabel }}</strong>
+        <strong>{{ PAYMENT_MODE_LABELS[paymentMode] }}</strong>
       </p>
       <div class="footer-actions">
         <button v-if="selectedItem" class="button button--secondary footer-action" type="button" @click="returnToItems">
@@ -208,7 +215,7 @@ onMounted(loadCategories)
           v-else
           class="button button--secondary footer-action"
           type="button"
-          :disabled="returning"
+          :disabled="returning || locked"
           @click="$emit('return-to-payment')"
         >
           お支払い方法を変更
@@ -233,8 +240,8 @@ onMounted(loadCategories)
       aria-controls="cart-drawer"
       @click="openCart"
     >
-      <span class="cart-tab-label">カートを確認</span>
-      <strong>{{ cartQuantity }}点</strong>
+      <span class="cart-tab-label">{{ receipt ? '注文結果を確認' : 'カートを確認' }}</span>
+      <strong v-if="!receipt">{{ cartQuantity }}点</strong>
     </button>
 
     <CartDrawer
@@ -242,6 +249,15 @@ onMounted(loadCategories)
       :lines="cartLines"
       :quantity="cartQuantity"
       :totals="cartAmounts"
+      :payment-mode="paymentMode"
+      :pending="pending"
+      :receipt="receipt"
+      :locked="locked"
+      :mixed-tokens="mixedTokens"
+      :sending="sending"
+      :order-error="orderError"
+      @confirm="confirm"
+      @continue-ordering="addAnotherOrder"
       @change-quantity="changeCartQuantity"
       @remove="removeCartLine"
       @close="cartTab?.focus({ preventScroll: true })"

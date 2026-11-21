@@ -12,6 +12,18 @@ test('proxies visit session starts from development and preview origins', () => 
   assert.deepEqual(config.preview.proxy[route], config.server.proxy[route])
 })
 
+test('proxies order registrations for an individual visit from development and preview origins', () => {
+  const config = viteConfig({ mode: 'development' })
+  const findRoute = (proxy, path) => Object.keys(proxy).find((route) => new RegExp(route).test(path))
+
+  for (const { proxy } of [config.server, config.preview]) {
+    const route = findRoute(proxy, '/device/visit-sessions/123/orders')
+    assert.equal(proxy[route]?.changeOrigin, true)
+    assert.equal(findRoute(proxy, '/device/visit-sessions/123/orders/456'), undefined)
+    assert.equal(findRoute(proxy, '/device/visit-sessions/current/orders'), undefined)
+  }
+})
+
 test('proxies category and item list queries from development and preview origins', () => {
   const config = viteConfig({ mode: 'development' })
   const findRoute = (proxy, path) => Object.keys(proxy).find((route) => new RegExp(route).test(path))
