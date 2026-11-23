@@ -5,7 +5,7 @@ import { createVisitSession } from '../../../../src/features/visit-session/servi
 
 const deviceUuid = 'test-device'
 const token = { type: 'Bearer', value: 'test-token', deviceUuid }
-const pending = { requestId: 'request-1', paymentMode: 'combined' }
+const pending = { requestId: 'request-1' }
 const started = { ...pending, visitSessionId: 123 }
 
 function fixture() {
@@ -38,33 +38,18 @@ function fixture() {
   return { options, calls }
 }
 
-test('stores the chosen payment mode with the session ID and restores it without a new request', async () => {
+test('starts and restores the same visit without issuing a new request', async () => {
   const { options, calls } = fixture()
   const session = createVisitSession(options)
 
   assert.equal(session.load(deviceUuid), null)
-  assert.deepEqual(await session.start(deviceUuid, 'combined'), started)
+  assert.deepEqual(await session.start(deviceUuid), started)
   assert.deepEqual(createVisitSession(options).load(deviceUuid), started)
   assert.equal(session.load('another-device'), null)
   assert.deepEqual(calls, [['request-1', token]])
 })
 
-test('resets and reselects the payment mode for a completed start without resending it', async () => {
-  const { options, calls } = fixture()
-  const session = createVisitSession(options)
-  assert.deepEqual(await session.start(deviceUuid, 'combined'), started)
-
-  const reset = { ...started, paymentMode: null }
-  assert.deepEqual(await session.resetPaymentMode(deviceUuid), reset)
-  const reloaded = createVisitSession(options)
-  assert.deepEqual(reloaded.load(deviceUuid), reset)
-  assert.deepEqual(await reloaded.start(deviceUuid, 'per_order'), {
-    ...started, paymentMode: 'per_order',
-  })
-  assert.deepEqual(calls, [['request-1', token]])
-})
-
-test('reuses the same pending request and payment mode after a lost response and reload', async () => {
+test('reuses the same pending request after a lost response and reload', async () => {
   const { options, calls } = fixture()
   const send = options.startVisitSession
   let loseResponse = true
@@ -74,37 +59,35 @@ test('reuses the same pending request and payment mode after a lost response and
     return sessionId
   }
   const session = createVisitSession(options)
-  await assert.rejects(session.start(deviceUuid, 'combined'), ApiError)
+  await assert.rejects(session.start(deviceUuid), ApiError)
   assert.deepEqual(session.load(deviceUuid), pending)
-  assert.deepEqual(await session.resetPaymentMode(deviceUuid), pending)
 
   loseResponse = false
   const reloaded = createVisitSession(options)
-  assert.deepEqual(await reloaded.start(deviceUuid, 'per_order'), pending)
   assert.deepEqual(await reloaded.start(deviceUuid), started)
   assert.deepEqual(calls, [['request-1', token], ['request-1', token]])
 })
 
-test('serializes starts in separate tabs and keeps the first completed choice', async () => {
+test('serializes starts in separate tabs and reuses the started visit', async () => {
   const { options, calls } = fixture()
   const firstTab = createVisitSession(options)
   const secondTab = createVisitSession(options)
   const results = await Promise.all([
-    firstTab.start(deviceUuid, 'combined'),
-    secondTab.start(deviceUuid, 'per_order'),
+    firstTab.start(deviceUuid),
+    secondTab.start(deviceUuid),
   ])
 
   assert.deepEqual(results, [started, started])
   assert.deepEqual(calls, [['request-1', token]])
 })
 
-test('keeps the original payment mode while checkout is in progress', async () => {
+test('keeps an existing checkout when a stale start is retried', async () => {
   const { options } = fixture()
   const session = createVisitSession(options)
-  await session.start(deviceUuid, 'combined')
-  const activeCheckout = { ...started, checkout: { phase: 'create', orderId: null } }
+  await session.start(deviceUuid)
+  const activeCheckout = { ...started, checkout: { phase: 'create' } }
   options.storage.save(deviceUuid, activeCheckout)
-  assert.deepEqual(await session.resetPaymentMode(deviceUuid), activeCheckout)
+  assert.deepEqual(await session.start(deviceUuid), activeCheckout)
 })
 
 test('refreshes rejected authentication once without changing the request ID', async () => {
@@ -123,7 +106,7 @@ test('refreshes rejected authentication once without changing the request ID', a
     return sessionId
   }
 
-  assert.deepEqual(await createVisitSession(options).start(deviceUuid, 'combined'), started)
+  assert.deepEqual(await createVisitSession(options).start(deviceUuid), started)
   assert.deepEqual(calls, [['request-1', token], ['request-1', refreshed]])
 })
 
@@ -134,10 +117,10 @@ test('does not send a start when storage fails or authentication belongs to anot
   options.storage.save = () => { throw failure }
   const session = createVisitSession(options)
 
-  await assert.rejects(session.start(deviceUuid, 'combined'), (error) => error === failure)
+  await assert.rejects(session.start(deviceUuid), (error) => error === failure)
   options.storage.save = save
   options.auth.getAccessToken = async () => ({ ...token, deviceUuid: 'another-device' })
-  await assert.rejects(session.start(deviceUuid, 'combined'), { status: 401 })
+  await assert.rejects(session.start(deviceUuid), { status: 401 })
   assert.deepEqual(calls, [])
 })
 
@@ -150,14 +133,14 @@ test('keeps the pending request if the result cannot be saved', async () => {
   }
   const session = createVisitSession(options)
 
-  await assert.rejects(session.start(deviceUuid, 'combined'), /Storage write failed/)
+  await assert.rejects(session.start(deviceUuid), /Storage write failed/)
   assert.deepEqual(session.load(deviceUuid), pending)
   options.storage.save = save
   assert.deepEqual(await session.start(deviceUuid), started)
   assert.deepEqual(calls, [['request-1', token], ['request-1', token]])
 })
 
-test('clears a rejected request on conflict and only creates a fresh request after a new selection', async () => {
+test('clears a rejected request on conflict and creates a fresh request on the next start', async () => {
   const { options, calls } = fixture()
   const send = options.startVisitSession
   let conflict = true
@@ -167,12 +150,11 @@ test('clears a rejected request on conflict and only creates a fresh request aft
     return sessionId
   }
   const session = createVisitSession(options)
-  await assert.rejects(session.start(deviceUuid, 'combined'), { status: 409 })
+  await assert.rejects(session.start(deviceUuid), { status: 409 })
   assert.equal(session.load(deviceUuid), null)
-  assert.equal(await session.start(deviceUuid), null)
   conflict = false
-  assert.deepEqual(await session.start(deviceUuid, 'per_order'), {
-    requestId: 'request-2', paymentMode: 'per_order', visitSessionId: 123,
+  assert.deepEqual(await session.start(deviceUuid), {
+    requestId: 'request-2', visitSessionId: 123,
   })
   assert.deepEqual(calls, [['request-1', token], ['request-2', token]])
 })

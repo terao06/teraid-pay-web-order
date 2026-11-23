@@ -1,5 +1,4 @@
 import { ApiError } from '../../../components/api/apiClient.js'
-import { isPaymentMode } from '../paymentModes.js'
 
 export function createVisitSession({ auth, storage, withLock, generateRequestId, startVisitSession }) {
   async function authenticate(deviceUuid) {
@@ -29,43 +28,16 @@ export function createVisitSession({ auth, storage, withLock, generateRequestId,
     }
   }
 
-  function savePaymentMode(deviceUuid, record, paymentMode) {
-    const updated = { ...record, paymentMode }
-    storage.save(deviceUuid, updated)
-    return updated
-  }
-
   return {
     load: storage.load,
 
-    async resetPaymentMode(deviceUuid) {
-      return withLock(deviceUuid, () => {
-        const record = storage.load(deviceUuid)
-        if (!record?.visitSessionId || record.paymentMode === null || record.checkout) return record
-        return savePaymentMode(deviceUuid, record, null)
-      })
-    },
-
-    async start(deviceUuid, paymentMode) {
-      if (paymentMode !== undefined && !isPaymentMode(paymentMode)) {
-        throw new TypeError('Invalid payment mode')
-      }
-
+    async start(deviceUuid) {
       return withLock(deviceUuid, async () => {
         let record = storage.load(deviceUuid)
-        if (record?.visitSessionId) {
-          if (record.paymentMode === null && paymentMode !== undefined) {
-            return savePaymentMode(deviceUuid, record, paymentMode)
-          }
-          return record
-        }
-        if (record && paymentMode !== undefined && record.paymentMode !== paymentMode) {
-          return record
-        }
+        if (record?.visitSessionId) return record
 
         if (!record) {
-          if (paymentMode === undefined) return null
-          record = { requestId: generateRequestId(), paymentMode }
+          record = { requestId: generateRequestId() }
           // Retain the same request ID if the API commits before the response arrives.
           storage.save(deviceUuid, record)
         }

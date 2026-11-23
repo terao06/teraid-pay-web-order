@@ -22,24 +22,19 @@ function mockStorage(t) {
 
 test('stores and clears a pending or completed start separately for each registered device', (t) => {
   mockStorage(t)
-  const pending = { requestId: 'request-1', paymentMode: 'combined' }
+  const pending = { requestId: 'request-1' }
   const started = { ...pending, visitSessionId: 123 }
 
   visitSessionStore.save('first-device', pending)
   assert.deepEqual(visitSessionStore.load('first-device'), pending)
   visitSessionStore.save('first-device', started)
-  visitSessionStore.save('second-device', { requestId: 'request-2', paymentMode: 'per_order' })
+  visitSessionStore.save('second-device', { requestId: 'request-2' })
   assert.deepEqual(visitSessionStore.load('first-device'), started)
-
-  const reset = { ...started, paymentMode: null }
-  visitSessionStore.save('first-device', reset)
-  assert.deepEqual(visitSessionStore.load('first-device'), reset)
 
   visitSessionStore.clear('first-device')
   assert.equal(visitSessionStore.load('first-device'), null)
   assert.deepEqual(visitSessionStore.load('second-device'), {
     requestId: 'request-2',
-    paymentMode: 'per_order',
   })
 })
 
@@ -60,16 +55,51 @@ test('reports damaged data and inaccessible browser storage', (t) => {
   assert.throws(() => visitSessionStore.save('test-device', {}), VisitSessionStorageError)
 })
 
-test('restores checkout state only when its visit and payment mode match', (t) => {
+test('restores older visits without a payment preference or a stale single-order checkout', (t) => {
   mockStorage(t)
-  const record = {
-    requestId: 'request-1', paymentMode: 'per_order', visitSessionId: 123,
-    checkout: { phase: 'create', orderId: 456 },
+  const pending = { requestId: 'request-1' }
+  const visit = { ...pending, visitSessionId: 123 }
+  for (const paymentMode of ['combined', 'per_order', null]) {
+    visitSessionStore.save('device', { ...visit, paymentMode })
+    assert.deepEqual(visitSessionStore.load('device'), visit)
   }
+  visitSessionStore.save('device', { ...pending, paymentMode: 'per_order' })
+  assert.deepEqual(visitSessionStore.load('device'), pending)
+
+  visitSessionStore.save('device', {
+    ...visit, paymentMode: 'per_order', checkout: { phase: 'create', orderId: 456 },
+  })
+  assert.deepEqual(visitSessionStore.load('device'), visit)
+  visitSessionStore.save('device', {
+    ...visit, paymentMode: 'combined', checkout: { phase: 'create', orderId: null },
+  })
+  assert.deepEqual(visitSessionStore.load('device'), { ...visit, checkout: { phase: 'create' } })
+})
+
+test('retains IDs and keys needed to recover legacy payments', (t) => {
+  mockStorage(t)
+  const visit = { requestId: 'request-1', visitSessionId: 123 }
+  const summary = {
+    checkout_id: 11, token_symbol: 'JPYC', total_amount: '100.000000',
+    orders: [{ menu_order_id: 456, total_amount: '100.000000', items: [] }],
+  }
+  for (const [checkout, restored] of [
+    [{ phase: 'sending', key: 'old-key', summary }, { phase: 'sending', key: 'old-key', summary, legacyPayment: true }],
+    [{ phase: 'verify', paymentId: 33, summary }, { phase: 'verify', paymentId: 33, summary }],
+    [{ phase: 'paid', summary }, { phase: 'complete', summary }],
+  ]) {
+    visitSessionStore.save('device', {
+      ...visit, paymentMode: 'per_order', checkout: { ...checkout, orderId: 456 },
+    })
+    assert.deepEqual(visitSessionStore.load('device'), { ...visit, checkout: restored })
+  }
+})
+
+test('rejects invalid checkout state and checkout state without a visit', (t) => {
+  mockStorage(t)
+  const record = { requestId: 'request-1', checkout: { phase: 'create' } }
   visitSessionStore.save('device', record)
-  assert.deepEqual(visitSessionStore.load('device'), record)
-  visitSessionStore.save('device', { ...record, paymentMode: 'combined' })
   assert.throws(() => visitSessionStore.load('device'), VisitSessionStorageError)
-  visitSessionStore.save('device', { ...record, paymentMode: null })
+  visitSessionStore.save('device', { ...record, visitSessionId: 123, checkout: { phase: 'sending' } })
   assert.throws(() => visitSessionStore.load('device'), VisitSessionStorageError)
 })

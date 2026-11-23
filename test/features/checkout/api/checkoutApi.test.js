@@ -14,15 +14,19 @@ const summary = {
   }],
 }
 
-test('creates a checkout with the exact scope and authenticates every request', async () => {
-  for (const [orderId, body] of [[null, { scope: 'all_unpaid' }], [23, { scope: 'single_order', menu_order_id: 23 }]]) {
-    const checkout = await createCheckout(7, orderId, token, async (path, options) => {
-      assert.equal(path, '/device/visit-sessions/7/checkouts')
-      assert.deepEqual(options, { method: 'POST', headers: { Authorization: 'Bearer test-token' }, body })
-      return summary
-    })
-    assert.deepEqual(checkout, summary)
+test('creates an authenticated checkout for all unpaid orders', async () => {
+  const multipleOrders = {
+    ...summary, total_amount: '200.000000',
+    orders: [summary.orders[0], { ...summary.orders[0], menu_order_id: 24 }],
   }
+  const checkout = await createCheckout(7, token, async (path, options) => {
+    assert.equal(path, '/device/visit-sessions/7/checkouts')
+    assert.deepEqual(options, {
+      method: 'POST', headers: { Authorization: 'Bearer test-token' }, body: { scope: 'all_unpaid' },
+    })
+    return multipleOrders
+  })
+  assert.deepEqual(checkout, multipleOrders)
 })
 
 test('posts the face image and idempotency key, then verifies the returned payment ID with no body', async () => {
@@ -43,11 +47,11 @@ test('posts the face image and idempotency key, then verifies the returned payme
   assert.equal(result.status, 'paid')
 })
 
-test('rejects a different single order, malformed amounts and a result for a different payment', async () => {
-  await assert.rejects(createCheckout(7, 99, token, async () => summary), ApiError)
-  await assert.rejects(createCheckout(7, null, token, async () => ({ ...summary, total_amount: '4' })), ApiError)
+test('rejects empty or malformed checkout summaries and a result for a different payment', async () => {
+  await assert.rejects(createCheckout(7, token, async () => ({ ...summary, orders: [] })), ApiError)
+  await assert.rejects(createCheckout(7, token, async () => ({ ...summary, total_amount: '4' })), ApiError)
   const wideTotal = { ...summary, total_amount: '100000000000000.000000' }
-  assert.deepEqual(await createCheckout(7, null, token, async () => wideTotal), wideTotal)
+  assert.deepEqual(await createCheckout(7, token, async () => wideTotal), wideTotal)
   await assert.rejects(startFacePayment(11, 'key', 'ZmFjZQ==', token, async () => ({
     payment_request_id: 33, status: 'unknown',
   })), ApiError)

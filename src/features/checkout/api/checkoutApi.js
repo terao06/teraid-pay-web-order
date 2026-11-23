@@ -7,17 +7,13 @@ export const CHECKOUT_PATH_SUFFIX = '/checkouts'
 export const FACE_PAYMENT_PATH_SUFFIX = '/payments/face'
 export const PAYMENT_VERIFICATION_PATH_SUFFIX = '/verify'
 
-export async function createCheckout(visitSessionId, orderId, token, request = requestJson) {
-  const body = orderId === null
-    ? { scope: 'all_unpaid' }
-    : { scope: 'single_order', menu_order_id: orderId }
+export async function createCheckout(visitSessionId, token, request = requestJson) {
   const data = await request(`${VISIT_SESSION_START_PATH}/${visitSessionId}${CHECKOUT_PATH_SUFFIX}`, {
     method: 'POST',
     headers: { Authorization: `${token.type} ${token.value}` },
-    body,
+    body: { scope: 'all_unpaid' },
   })
-  if (!isCheckoutSummary(data) || (orderId !== null
-    && (data.orders.length !== 1 || data.orders[0].menu_order_id !== orderId))) {
+  if (!isCheckoutSummary(data)) {
     throw new ApiError('Invalid checkout response')
   }
   return data

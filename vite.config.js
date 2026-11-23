@@ -12,8 +12,9 @@ import { VISIT_SESSION_COMPLETE_SUFFIX, VISIT_SESSION_START_PATH } from './src/f
 
 const localHost = '127.0.0.1'
 
-export default defineConfig(({ mode }) => {
-  const { TERAID_PAY_API_TARGET: target } = loadEnv(mode, process.cwd(), 'TERAID_PAY_')
+export default defineConfig(({ mode, command, isPreview }) => {
+  const { TERAID_PAY_API_TARGET: target, VITE_FACE_PAYMENT_UPLOAD } =
+    loadEnv(mode, process.cwd(), ['TERAID_PAY_', 'VITE_FACE_PAYMENT_UPLOAD'])
   const deviceVisit = '^' + VISIT_SESSION_START_PATH + '/[1-9][0-9]*'
   const deviceCheckout = '^' + CHECKOUTS_PATH + '/[1-9][0-9]*'
   const proxy = Object.fromEntries([
@@ -30,6 +31,9 @@ export default defineConfig(({ mode }) => {
   ].map((route) => [route, { target, changeOrigin: true }]))
 
   return {
+    define: {
+      __FACE_PAYMENT_UPLOAD__: command === 'serve' && !isPreview && VITE_FACE_PAYMENT_UPLOAD === 'true',
+    },
     plugins: [
       vue(),
       {

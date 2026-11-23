@@ -1,4 +1,4 @@
-import { onUnmounted, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { ApiError } from '../../components/api/apiClient.js'
 import { CartStorageError } from '../cart/cartStore.js'
 import { VisitSessionStorageError } from '../visit-session/visitSessionStore.js'
@@ -18,7 +18,7 @@ function checkoutError(action, error) {
     return '会計を作成できませんでした。未払いの注文、通貨の違い、決済の進行状況をご確認ください。'
   }
   if (action === 'pay' && [400, 404, 422].includes(error?.status)) {
-    return '顔認証決済を開始できませんでした。お一人で撮影し、顔の登録とお支払い方法をご確認ください。'
+    return '顔認証決済を開始できませんでした。お一人で撮影し、顔の登録とウォレットの設定をご確認ください。'
   }
   if (action === 'verify') return '決済結果を取得できませんでした。同じ決済の結果を確認してください。'
   if (action === 'complete') return 'セッションの終了を確認できませんでした。終了を再試行してください。'
@@ -26,8 +26,12 @@ function checkoutError(action, error) {
 }
 
 export function useCheckoutFlow(deviceUuid, record, restore, flow = checkoutFlow) {
-  const busy = ref(false)
+  const activeAction = ref(null)
+  const busy = computed(() => activeAction.value !== null)
   const message = ref('')
+  const verificationPaused = ref(false)
+  const polling = computed(() => record.value?.checkout?.phase === 'verify' && !verificationPaused.value)
+  const completedVisit = ref(null)
   let timer
   let disposed = false
 
@@ -44,19 +48,26 @@ export function useCheckoutFlow(deviceUuid, record, restore, flow = checkoutFlow
     if (disposed || busy.value || !record.value?.visitSessionId) return
     clearTimeout(timer)
     const { visitSessionId, checkout } = record.value
-    busy.value = true
+    activeAction.value = action
     message.value = ''
+    if (action === 'verify') verificationPaused.value = false
+
     let retryVerification = true
     try {
-      await flow[action](deviceUuid, visitSessionId, checkout, input)
+      const result = await flow[action](deviceUuid, visitSessionId, checkout, input)
+      if (!disposed && action === 'complete' && result === true) {
+        completedVisit.value = visitSessionId
+      }
     } catch (error) {
       retryVerification = error instanceof ApiError && (error.status === undefined || error.status >= 500)
       message.value = checkoutError(action, error)
     } finally {
       if (!disposed) restore()
-      busy.value = false
-      if (!disposed && action === 'verify' && retryVerification && record.value?.checkout?.phase === 'verify') {
-        schedule('verify', POLL_INTERVAL_MS)
+      activeAction.value = null
+      if (!disposed && action === 'verify' && record.value?.visitSessionId === visitSessionId
+        && record.value.checkout?.phase === 'verify' && record.value.checkout.paymentId === checkout?.paymentId) {
+        verificationPaused.value = !retryVerification
+        if (retryVerification) schedule('verify', POLL_INTERVAL_MS)
       }
     }
   }
@@ -67,6 +78,7 @@ export function useCheckoutFlow(deviceUuid, record, restore, flow = checkoutFlow
     () => record.value?.checkout?.paymentId,
   ], ([, phase]) => {
     clearTimeout(timer)
+    verificationPaused.value = false
     if (automaticPhases.has(phase)) schedule(phase, 0)
   }, { immediate: true })
 
@@ -74,5 +86,5 @@ export function useCheckoutFlow(deviceUuid, record, restore, flow = checkoutFlow
     disposed = true
     clearTimeout(timer)
   })
-  return { run, busy, message }
+  return { run, activeAction, busy, message, polling, completedVisit }
 }

@@ -7,9 +7,9 @@ const device = 'test-device'
 const visit = 7
 const token = { deviceUuid: device, type: 'Bearer', value: 'test-token' }
 
-function setup(paymentMode = 'combined') {
+function setup() {
   const calls = []
-  let record = { visitSessionId: visit, requestId: 'start', paymentMode }
+  let record = { visitSessionId: visit, requestId: 'start' }
   let lock = Promise.resolve()
   let key = 0
   const options = {
@@ -25,9 +25,9 @@ function setup(paymentMode = 'combined') {
       return next
     },
     generateKey: () => `key-${++key}`,
-    createCheckout: async (id, orderId, accessToken) => {
-      calls.push(['create', id, orderId, accessToken])
-      return { checkout_id: 11, orders: [{ menu_order_id: orderId ?? 23 }] }
+    createCheckout: async (id, accessToken) => {
+      calls.push(['create', id, accessToken])
+      return { checkout_id: 11, orders: [{ menu_order_id: 23 }, { menu_order_id: 24 }] }
     },
     startFacePayment: async (id, idempotencyKey, _content, accessToken) => {
       calls.push(['pay', id, idempotencyKey, accessToken])
@@ -45,8 +45,8 @@ function setup(paymentMode = 'combined') {
   const reload = () => { flow = createCheckoutFlow(options); return flow }
   reload()
   const run = (action, input) => flow[action](device, visit, structuredClone(record?.checkout), input)
-  async function review(orderId = null) {
-    await run('begin', orderId)
+  async function review() {
+    await run('begin')
     await run('create')
   }
   return { calls, options, state: options.storage.load, run, reload, review }
@@ -72,38 +72,25 @@ test('combined payment survives reload and automatically becomes eligible to clo
   assert.equal(state().checkout.phase, 'verify')
   await run('verify')
   assert.equal(state().checkout.phase, 'complete')
+  assert.deepEqual(state().paidOrderIds, [23, 24])
   await run('complete')
   assert.equal(state(), null)
   assert.deepEqual(calls, [
-    ['create', visit, null, token], ['pay', 11, 'key-1', token],
+    ['create', visit, token], ['pay', 11, 'key-1', token],
     ['verify', 11, 33, token], ['verify', 11, 33, token],
     ['complete', visit, token], ['clearCart', device, visit], ['clearSession', device],
   ])
 })
 
-test('per-order checkout follows registration and keeps the same visit for additional orders', async () => {
-  const { calls, state, run } = setup('per_order')
-  const order = (orderId) => run('order', { paymentMode: 'per_order', confirm: async () => orderId })
+test('keeps taking additional orders until checkout is requested', async () => {
+  const { calls, state, run, review } = setup()
+  const order = (orderId) => run('order', async () => { calls.push(['order', orderId]) })
   await order(23)
-  await run('create')
-  await run('pay', 'photo')
-  await run('verify')
-  assert.equal(state().checkout.phase, 'paid')
-  await run('backToMenu')
-  assert.equal(state().checkout, undefined)
-  assert.deepEqual(state().paidOrderIds, [23])
-  await run('begin', 23)
-  assert.equal(state().checkout, undefined)
   await order(24)
-  await run('create')
-  await run('pay', 'photo')
-  await run('verify')
-  await run('end')
-  await run('complete')
-  assert.equal(state(), null)
-  assert.deepEqual(calls.filter(([action]) => action === 'create'), [
-    ['create', visit, 23, token], ['create', visit, 24, token],
-  ])
+  assert.equal(state().checkout, undefined)
+  await review()
+  assert.equal(state().checkout.phase, 'review')
+  assert.deepEqual(calls, [['order', 23], ['order', 24], ['create', visit, token]])
 })
 
 test('keeps the same checkout and key across lost responses and serializes stale concurrent submissions', async () => {
@@ -147,11 +134,11 @@ test('recreates changed or failed checkouts, while face rejection returns to rev
   await run('verify')
   assert.equal(state().checkout.phase, 'failed')
   await run('retryCheckout')
-  assert.deepEqual(state().checkout, { phase: 'create', orderId: null })
+  assert.deepEqual(state().checkout, { phase: 'create' })
 })
 
 test('retains the visit on completion conflict or lost response and retries the same session', async () => {
-  const { calls, options, state, run, reload } = setup('per_order')
+  const { calls, options, state, run, reload, review } = setup()
   const complete = options.completeVisitSession
   options.completeVisitSession = async (...args) => {
     await complete(...args)
@@ -160,30 +147,66 @@ test('retains the visit on completion conflict or lost response and retries the 
     if (count === 2) throw new ApiError('Connection lost')
   }
   reload()
-  await run('end')
+  await review()
+  await run('pay', 'photo')
+  await run('verify')
   await assert.rejects(run('complete'), { status: 409 })
   assert.equal(state().checkout.phase, 'completion_blocked')
   const staleCheckout = state().checkout
-  await run('backToMenu')
-  assert.equal(state().checkout, undefined)
-  await run('end')
+  await run('retryCompletion')
   await assert.rejects(run('complete'), ApiError)
   assert.equal(state().checkout.phase, 'complete')
   await reload().backToMenu(device, visit, staleCheckout)
   assert.equal(state().checkout.phase, 'complete')
   await run('complete')
   assert.equal(state(), null)
-  assert.deepEqual(calls, [
+  assert.deepEqual(calls.slice(-5), [
     ...Array(3).fill(['complete', visit, token]), ['clearCart', device, visit], ['clearSession', device],
   ])
 })
 
-test('does not submit a new order from another tab after the first per-order checkout is ready', async () => {
-  const { options, reload, state, run } = setup('per_order')
+test('blocks a stale order from another tab once checkout has started', async () => {
+  const { reload, state, run } = setup()
+  const flow = reload()
   let confirmCount = 0
-  const input = { paymentMode: 'per_order', async confirm() { return 23 + confirmCount++ } }
-  await Promise.all([run('order', input), reload().order(device, visit, undefined, input)])
-  assert.equal(confirmCount, 1)
-  assert.deepEqual(state().checkout, { phase: 'create', orderId: 23 })
-  assert.deepEqual(options.storage.load().paymentMode, 'per_order')
+  await Promise.all([
+    run('begin'),
+    flow.order(device, visit, undefined, async () => { confirmCount += 1 }),
+  ])
+  assert.equal(confirmCount, 0)
+  assert.deepEqual(state().checkout, { phase: 'create' })
+})
+
+test('can finish a previously paid visit and return to the menu if additional orders are outstanding', async () => {
+  const { options, reload, state, run } = setup()
+  options.storage.save(device, { ...state(), paidOrderIds: [23] })
+  options.completeVisitSession = async () => { throw new ApiError('Unpaid orders', 409) }
+  reload()
+  await run('begin', true)
+  assert.equal(state().checkout.phase, 'complete')
+  await assert.rejects(run('complete'), { status: 409 })
+  await run('backToMenu')
+  assert.equal(state().checkout, undefined)
+  assert.deepEqual(state().paidOrderIds, [23])
+})
+
+test('replays an old payment with its existing key and recreates the checkout when the API rejects it', async () => {
+  const { calls, options, reload, state, run } = setup()
+  options.storage.save(device, {
+    ...state(), checkout: { phase: 'sending', summary: { checkout_id: 9 }, key: 'old-key', legacyPayment: true },
+  })
+  const send = options.startFacePayment
+  options.startFacePayment = async (...args) => {
+    await send(...args)
+    if (calls.length === 1) throw new ApiError('Connection lost')
+    throw new ApiError('Checkout changed', 409)
+  }
+  reload()
+  await assert.rejects(run('pay', 'photo'), ApiError)
+  assert.equal(state().checkout.phase, 'sending')
+  await assert.rejects(run('pay', 'photo'), { status: 409 })
+  assert.deepEqual(state().checkout, { phase: 'create' })
+  await run('create')
+  assert.equal(state().checkout.phase, 'review')
+  assert.deepEqual(calls, [['pay', 9, 'old-key', token], ['pay', 9, 'old-key', token], ['create', visit, token]])
 })

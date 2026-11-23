@@ -5,6 +5,23 @@ import viteConfig from '../../vite.config.js'
 
 const indexHtml = readFileSync(new URL('../../index.html', import.meta.url), 'utf8')
 
+test('enables face image upload only when explicitly requested on the development server', (t) => {
+  const previous = process.env.VITE_FACE_PAYMENT_UPLOAD
+  t.after(() => {
+    if (previous === undefined) delete process.env.VITE_FACE_PAYMENT_UPLOAD
+    else process.env.VITE_FACE_PAYMENT_UPLOAD = previous
+  })
+
+  const enabled = (command, isPreview = false) =>
+    viteConfig({ mode: 'development', command, isPreview }).define.__FACE_PAYMENT_UPLOAD__
+  process.env.VITE_FACE_PAYMENT_UPLOAD = 'false'
+  assert.equal(enabled('serve'), false)
+  process.env.VITE_FACE_PAYMENT_UPLOAD = 'true'
+  assert.equal(enabled('serve'), true)
+  assert.equal(enabled('serve', true), false)
+  assert.equal(enabled('build'), false)
+})
+
 test('proxies visit session starts from development and preview origins', () => {
   const config = viteConfig({ mode: 'development' })
   const route = '^/device/visit-sessions$'

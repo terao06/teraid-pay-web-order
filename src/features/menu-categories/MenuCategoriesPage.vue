@@ -5,7 +5,9 @@ import ToastMessage from '../../components/feedback/ToastMessage.vue'
 import CartDrawer from '../cart/CartDrawer.vue'
 import { addCartItem, cartTotals, removeCartItem, setCartQuantity } from '../cart/cart.js'
 import { useCartOrder } from '../cart/useCartOrder.js'
-import { PAYMENT_MODE_LABELS } from '../visit-session/paymentModes.js'
+import OrderHistoryDialog from '../order/OrderHistoryDialog.vue'
+import { ORDER_STATUS_CANCELED, ORDER_STATUS_PAID } from '../order/orderHistoryEntry.js'
+import { useOrderHistory } from '../order/useOrderHistory.js'
 import MenuItemOptions from './MenuItemOptions.vue'
 import MenuItemsList from './MenuItemsList.vue'
 import { loadMenuCategories } from './menuCategories.js'
@@ -15,12 +17,11 @@ import { calculateMenuSubtotal, hasValidMenuOptions } from './menuItemSelection.
 const props = defineProps({
   deviceUuid: { type: String, required: true },
   visitSessionId: { type: Number, required: true },
-  paymentMode: { type: String, required: true },
   paidOrderIds: { type: Array, default: () => [] },
   returning: { type: Boolean, required: true },
   returnError: { type: String, required: true },
 })
-const emit = defineEmits(['return-to-payment', 'checkout', 'confirm-order', 'end-visit'])
+const emit = defineEmits(['checkout', 'confirm-order'])
 
 const requestErrors = {
   401: '端末を認証できませんでした。店舗スタッフにお声がけください。',
@@ -31,6 +32,8 @@ const requestErrors = {
 const heading = ref(null)
 const cartTab = ref(null)
 const cartDrawer = ref(null)
+const historyTab = ref(null)
+const historyDialog = ref(null)
 const categories = ref([])
 const selectedCategory = ref(null)
 const selectedItem = ref(null)
@@ -38,6 +41,10 @@ const selectedOptions = ref(new Map())
 const {
   lines: cartLines, pending, receipt, locked, mixedTokens, sending, orderError, changeLines, confirm, continueOrdering,
 } = useCartOrder(props.deviceUuid, props.visitSessionId, { paidOrderIds: props.paidOrderIds })
+const latestOrderId = ref(receipt.value?.menu_order_id ?? null)
+const {
+  orders, loading: historyLoading, error: historyError, refresh: refreshHistory,
+} = useOrderHistory(props.deviceUuid, props.visitSessionId)
 const cartToast = ref(null)
 const failedImages = ref(new Set())
 const loading = ref(true)
@@ -49,7 +56,8 @@ let refreshCategoriesOnReturn = false
 const subtotal = computed(() => selectedItem.value
   ? calculateMenuSubtotal(selectedItem.value, selectedOptions.value)
   : null)
-const canAddToCart = computed(() => !locked.value && selectedItem.value
+const canContinueOrdering = computed(() => Boolean(receipt.value))
+const canAddToCart = computed(() => (!locked.value || canContinueOrdering.value) && selectedItem.value
   && hasValidMenuOptions(selectedItem.value, selectedOptions.value))
 const cartQuantity = computed(() => cartLines.value.reduce((total, line) => total + line.quantity, 0))
 const cartAmounts = computed(() => cartTotals(cartLines.value))
@@ -95,6 +103,10 @@ function addSelectedItem() {
   if (!canAddToCart.value) return
   const lines = addCartItem(cartLines.value, selectedItem.value, selectedOptions.value)
   if (lines === cartLines.value) return
+  if (canContinueOrdering.value && !continueOrdering()) {
+    openCart()
+    return
+  }
   changeLines(lines)
 
   cartToast.value?.show('カートに追加しました')
@@ -114,6 +126,12 @@ function openCart() {
   cartDrawer.value?.open()
 }
 
+function openHistory() {
+  cartToast.value?.dismiss()
+  historyDialog.value?.open(historyTab.value?.offsetTop)
+  refreshHistory()
+}
+
 async function loadCategories() {
   focusHeading()
   loading.value = true
@@ -130,33 +148,36 @@ async function loadCategories() {
 }
 
 function addAnotherOrder() {
-  if (props.paymentMode !== 'combined' || !continueOrdering()) return
+  if (!canContinueOrdering.value || !continueOrdering()) return
   cartDrawer.value?.close()
 }
 
 function startCheckout() {
   if (!canStartCheckout.value) return
-  const orderId = props.paymentMode === 'combined' ? null : receipt.value?.menu_order_id
-  if (orderId === undefined) return
+  // A visit resumed after an earlier payment can have no unpaid orders left.
+  const alreadyPaid = props.paidOrderIds.length > 0 && !historyLoading.value && !historyError.value
+    && (latestOrderId.value === null || orders.value.some(({ menu_order_id }) => menu_order_id === latestOrderId.value))
+    && orders.value.some(({ status }) => status === ORDER_STATUS_PAID)
+    && orders.value.every(({ status }) => [ORDER_STATUS_PAID, ORDER_STATUS_CANCELED].includes(status))
   cartDrawer.value?.close()
-  emit('checkout', orderId)
+  emit('checkout', alreadyPaid)
 }
 
 function confirmOrder() {
-  emit('confirm-order', {
-    paymentMode: props.paymentMode,
-    async confirm() {
-      await confirm()
-      if (props.paymentMode === 'per_order' && receipt.value) cartDrawer.value?.close()
-      return receipt.value?.menu_order_id
-    },
+  emit('confirm-order', async () => {
+    await confirm()
+    if (!receipt.value) return
+    latestOrderId.value = receipt.value.menu_order_id
+    cartDrawer.value?.close()
+    cartToast.value?.show('ご注文を受け付けました')
+    refreshHistory()
   })
 }
 
 onMounted(() => {
   loadCategories()
-  if (props.paymentMode === 'per_order' && receipt.value && !props.returnError) startCheckout()
-  else if (locked.value) openCart()
+  refreshHistory()
+  if (locked.value && !receipt.value) openCart()
 })
 </script>
 
@@ -223,10 +244,6 @@ onMounted(() => {
         <span>小計</span>
         <strong>{{ formatMenuAmount(subtotal) }} {{ selectedItem.token_symbol }}</strong>
       </p>
-      <p v-else class="footer-info">
-        <span>お支払い方法</span>
-        <strong>{{ PAYMENT_MODE_LABELS[paymentMode] }}</strong>
-      </p>
       <div class="footer-actions">
         <button v-if="selectedItem" class="button button--secondary footer-action" type="button" @click="returnToItems">
           商品一覧へ戻る
@@ -235,28 +252,12 @@ onMounted(() => {
           カテゴリー一覧へ戻る
         </button>
         <button
-          v-else
-          class="button button--secondary footer-action"
-          type="button"
-          :disabled="returning || locked"
-          @click="$emit('return-to-payment')"
-        >
-          お支払い方法を変更
-        </button>
-        <button
-          v-if="!selectedItem && paymentMode === 'combined'"
+          v-if="!selectedItem"
           class="button button--primary footer-action"
           type="button"
           :disabled="!canStartCheckout"
           @click="startCheckout"
         >お会計</button>
-        <button
-          v-if="!selectedItem && paymentMode === 'per_order' && !locked"
-          class="button button--secondary footer-action"
-          type="button"
-          :disabled="!canStartCheckout"
-          @click="emit('end-visit')"
-        >注文を終了</button>
         <button
           v-if="selectedItem"
           class="button button--primary footer-action add-to-cart"
@@ -269,92 +270,98 @@ onMounted(() => {
       </div>
     </footer>
 
-    <button
-      ref="cartTab"
-      class="button cart-tab"
-      type="button"
-      aria-haspopup="dialog"
-      aria-controls="cart-drawer"
-      @click="openCart"
-    >
-      <span class="cart-tab-label">{{ receipt ? '注文結果を確認' : 'カートを確認' }}</span>
-      <strong v-if="!receipt">{{ cartQuantity }}点</strong>
-    </button>
+    <div class="menu-tabs">
+      <button
+        ref="cartTab"
+        class="button edge-tab cart-trigger"
+        type="button"
+        aria-haspopup="dialog"
+        aria-controls="cart-drawer"
+        aria-expanded="false"
+        @click="openCart"
+      >
+        <span class="edge-tab-label">カートを確認</span>
+        <strong>{{ cartQuantity }}点</strong>
+      </button>
+      <button
+        ref="historyTab"
+        class="button edge-tab history-trigger"
+        type="button"
+        aria-haspopup="dialog"
+        aria-controls="order-history-dialog"
+        aria-expanded="false"
+        @click="openHistory"
+      >
+        <span class="edge-tab-label">注文履歴</span>
+      </button>
+    </div>
 
     <CartDrawer
       ref="cartDrawer"
       :lines="cartLines"
       :quantity="cartQuantity"
       :totals="cartAmounts"
-      :payment-mode="paymentMode"
+      :can-continue-ordering="canContinueOrdering"
       :pending="pending"
-      :receipt="receipt"
       :locked="locked"
       :mixed-tokens="mixedTokens"
       :sending="sending"
       :order-error="orderError"
       @confirm="confirmOrder"
-      @checkout="startCheckout"
       @continue-ordering="addAnotherOrder"
       @change-quantity="changeCartQuantity"
       @remove="removeCartLine"
       @close="cartTab?.focus({ preventScroll: true })"
     />
 
+    <OrderHistoryDialog
+      ref="historyDialog"
+      :orders="orders"
+      :loading="historyLoading"
+      :error="historyError"
+      :latest-order-id="latestOrderId"
+      @close="historyTab?.focus({ preventScroll: true })"
+      @retry="refreshHistory"
+    />
     <ToastMessage ref="cartToast" class="cart-toast" />
   </section>
 </template>
 
 <style scoped>
 .menu-panel {
-  --cart-tab-width: 3.5rem;
+  --menu-tab-width: 3.5rem;
+  --menu-tabs-top: clamp(.5rem, calc(40dvh - 4.25rem), calc(100dvh - 15rem));
+  --drawer-slide-duration: .18s;
   display: flex;
   flex: 1;
   flex-direction: column;
   gap: clamp(1rem, 2vw, 1.25rem);
   min-inline-size: 0;
-  padding-inline-end: max(0px, var(--cart-tab-width) + .625rem - var(--workspace-gutter));
+  padding-inline-end: max(0px, var(--menu-tab-width) + .625rem - var(--workspace-gutter));
 }
 
-.cart-tab {
+.menu-tabs {
   position: fixed;
   z-index: 2;
-  inset-block-start: 40%;
+  inset-block-start: var(--menu-tabs-top);
   inset-inline-end: 0;
   display: grid;
-  inline-size: var(--cart-tab-width);
-  justify-content: stretch;
-  gap: .3rem;
-  padding: .65rem .3rem;
-  transform: translateY(-50%);
-  border: 0;
-  border-radius: .85rem 0 0 .85rem;
-  color: var(--color-on-accent);
-  background: var(--color-accent);
-  box-shadow: -2px 3px 8px #342b1826;
-  font-size: .875rem;
-  line-height: 1.25;
-  text-align: center;
+  gap: .5rem;
+  inline-size: var(--menu-tab-width);
 }
 
-.cart-tab-label {
-  justify-self: center;
-  writing-mode: vertical-rl;
-  letter-spacing: .08em;
+.menu-panel:has(#cart-drawer[open]) .cart-trigger,
+.menu-panel:has(#order-history-dialog[open]) .history-trigger {
+  opacity: 0;
+  transition-delay: 0s;
 }
 
-.cart-tab strong {
-  padding: .18rem .2rem;
-  overflow-wrap: anywhere;
-  border-radius: .5rem;
-  color: var(--color-accent-hover);
-  background: var(--color-brass-light);
-  font-variant-numeric: tabular-nums;
-}
-
-.cart-tab:focus-visible {
-  outline-color: var(--color-brass-light);
-  outline-offset: -4px;
+@media (prefers-reduced-motion: no-preference) {
+  @supports (overlay: auto) {
+    .cart-trigger, .history-trigger {
+      transition: opacity 0s var(--drawer-slide-duration);
+    }
+  }
 }
 
 .menu-heading h1 {
@@ -542,10 +549,6 @@ onMounted(() => {
 @media (hover: hover) {
   .category-card:hover {
     border-color: var(--color-accent);
-  }
-
-  .cart-tab:hover {
-    background: var(--color-accent-hover);
   }
 }
 
