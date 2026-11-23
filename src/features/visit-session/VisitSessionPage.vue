@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ApiError } from '../../components/api/apiClient.js'
 import ToastMessage from '../../components/feedback/ToastMessage.vue'
 import CheckoutPage from '../checkout/CheckoutPage.vue'
+import { isCheckoutDeferred } from '../checkout/checkoutState.js'
 import { useCheckoutFlow } from '../checkout/useCheckoutFlow.js'
 import MenuCategoriesPage from '../menu-categories/MenuCategoriesPage.vue'
 import { visitSession } from './visitSession.js'
@@ -31,9 +32,10 @@ const errorMessage = ref('')
 const heading = ref(null)
 const completionToast = ref(null)
 
+const checkoutDeferred = computed(() => isCheckoutDeferred(record.value?.checkout?.phase))
 const screen = computed(() => {
   if (storageUnavailable.value) return 'unavailable'
-  if (record.value?.checkout) return 'checkout'
+  if (record.value?.checkout && !checkoutDeferred.value) return 'checkout'
   if (record.value?.visitSessionId) return 'started'
   return record.value ? 'pending' : 'welcome'
 })
@@ -113,10 +115,12 @@ watch(screen, focusHeading, { flush: 'post' })
     :device-uuid="deviceUuid"
     :visit-session-id="record.visitSessionId"
     :paid-order-ids="record.paidOrderIds"
+    :deferred-checkout="checkoutDeferred ? record.checkout : null"
     :returning="busy || checkoutBusy"
     :return-error="errorMessage || checkoutMessage"
     @confirm-order="runCheckout('order', $event)"
-    @checkout="runCheckout('begin', $event)"
+    @checkout="runCheckout('begin')"
+    @finish="runCheckout('finish')"
   />
   <section v-else class="visit-panel" aria-labelledby="visit-title">
     <h1 id="visit-title" ref="heading" tabindex="-1">{{ titles[screen] }}</h1>

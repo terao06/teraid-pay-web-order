@@ -35,6 +35,9 @@ test('keeps polling restored payments through confirming results and transient e
       calls.push(['verify', device, visit, paymentId])
       if (calls.length === 1) throw new ApiError('RPC temporarily unavailable', 503)
       if (calls.length === 2) return
+      saved = { ...saved, checkout: { phase: 'paid' } }
+    },
+    async finish() {
       saved = { ...saved, checkout: { phase: 'complete' } }
     },
     async complete(device, visit) {
@@ -62,6 +65,10 @@ test('keeps polling restored payments through confirming results and transient e
   await tick(t, 3000)
   assert.equal(checkout.polling.value, false)
   assert.equal(checkout.completedVisit.value, null)
+  assert.equal(record.value.checkout.phase, 'paid')
+  await tick(t, 3000)
+  assert.equal(calls.length, 3)
+  await checkout.run('finish')
   await tick(t, 0)
   assert.equal(record.value, null)
   assert.equal(checkout.completedVisit.value, visitSessionId)
@@ -69,6 +76,53 @@ test('keeps polling restored payments through confirming results and transient e
     ['verify', 'device', 7, 33], ['verify', 'device', 7, 33],
     ['verify', 'device', 7, 33], ['complete', 'device', 7],
   ])
+})
+
+test('automatically creates the checkout once order confirmation has been saved', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let saved = { visitSessionId: 7 }
+  const record = ref(saved)
+  let createCount = 0
+  const checkout = mountFlow(t, record, () => { record.value = saved }, {
+    async order(_device, _visit, _checkout, confirm) {
+      if (await confirm()) saved = { ...saved, checkout: { phase: 'create' } }
+    },
+    async create() {
+      createCount += 1
+      saved = { ...saved, checkout: { phase: 'review' } }
+    },
+  })
+
+  await checkout.run('order', async () => undefined)
+  await tick(t, 0)
+  assert.equal(createCount, 0)
+  await checkout.run('order', async () => ({ menu_order_id: 23 }))
+  await tick(t, 0)
+  assert.equal(createCount, 1)
+  assert.equal(record.value.checkout.phase, 'review')
+})
+
+test('waits for a previously deferred checkout to be resumed', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let saved = { visitSessionId: 7, checkout: { phase: 'deferred' } }
+  const record = ref(saved)
+  let createCount = 0
+  const checkout = mountFlow(t, record, () => { record.value = saved }, {
+    async begin() {
+      saved = { ...saved, checkout: { phase: 'create' } }
+    },
+    async create() {
+      createCount += 1
+      saved = { ...saved, checkout: { phase: 'review' } }
+    },
+  })
+
+  await tick(t, 3000)
+  assert.equal(createCount, 0)
+  await checkout.run('begin')
+  await tick(t, 0)
+  assert.equal(createCount, 1)
+  assert.equal(record.value.checkout.phase, 'review')
 })
 
 test('stops automatic verification on a non-retryable error and resumes on explicit retry', async (t) => {

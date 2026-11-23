@@ -18,10 +18,11 @@ const props = defineProps({
   deviceUuid: { type: String, required: true },
   visitSessionId: { type: Number, required: true },
   paidOrderIds: { type: Array, default: () => [] },
+  deferredCheckout: { type: Object, default: null },
   returning: { type: Boolean, required: true },
   returnError: { type: String, required: true },
 })
-const emit = defineEmits(['checkout', 'confirm-order'])
+const emit = defineEmits(['checkout', 'confirm-order', 'finish'])
 
 const requestErrors = {
   401: '端末を認証できませんでした。店舗スタッフにお声がけください。',
@@ -38,10 +39,12 @@ const categories = ref([])
 const selectedCategory = ref(null)
 const selectedItem = ref(null)
 const selectedOptions = ref(new Map())
+const allowAdditionalOrder = computed(() => props.deferredCheckout?.phase === 'deferred')
+const paymentDeferred = computed(() => props.deferredCheckout?.phase === 'payment_deferred')
 const {
-  lines: cartLines, pending, receipt, locked, mixedTokens, sending, orderError, changeLines, confirm, continueOrdering,
-} = useCartOrder(props.deviceUuid, props.visitSessionId, { paidOrderIds: props.paidOrderIds })
-const latestOrderId = ref(receipt.value?.menu_order_id ?? null)
+  lines: cartLines, pending, receipt, locked, mixedTokens, sending, orderError, changeLines, confirm,
+} = useCartOrder(props.deviceUuid, props.visitSessionId, { paidOrderIds: props.paidOrderIds, allowAdditionalOrder })
+const latestOrderId = computed(() => receipt.value?.menu_order_id ?? null)
 const {
   orders, loading: historyLoading, error: historyError, refresh: refreshHistory,
 } = useOrderHistory(props.deviceUuid, props.visitSessionId)
@@ -56,13 +59,31 @@ let refreshCategoriesOnReturn = false
 const subtotal = computed(() => selectedItem.value
   ? calculateMenuSubtotal(selectedItem.value, selectedOptions.value)
   : null)
-const canContinueOrdering = computed(() => Boolean(receipt.value))
-const canAddToCart = computed(() => (!locked.value || canContinueOrdering.value) && selectedItem.value
+const canAddToCart = computed(() => !props.returning && !locked.value && selectedItem.value
   && hasValidMenuOptions(selectedItem.value, selectedOptions.value))
 const cartQuantity = computed(() => cartLines.value.reduce((total, line) => total + line.quantity, 0))
 const cartAmounts = computed(() => cartTotals(cartLines.value))
-const canStartCheckout = computed(() => !props.returning && (!locked.value || Boolean(receipt.value))
-  && !cartLines.value.length)
+const cartHasConfirmedOrder = computed(() => Boolean(receipt.value)
+  || (allowAdditionalOrder.value && !cartLines.value.length))
+const unpaidOrders = computed(() => orders.value.filter(({ status }) => ![ORDER_STATUS_PAID, ORDER_STATUS_CANCELED].includes(status)))
+const additionalOrderError = computed(() => {
+  if (!allowAdditionalOrder.value || pending.value || !cartLines.value.length) return ''
+  const tokens = new Set(unpaidOrders.value.map(({ token_symbol }) => token_symbol))
+  if (props.deferredCheckout.tokenSymbol) tokens.add(props.deferredCheckout.tokenSymbol)
+  if (!tokens.size && historyLoading.value) return '先に確定した注文を確認しています。'
+  if (!tokens.size && historyError.value) return '先に確定した注文を確認できませんでした。注文履歴から再試行してください。'
+  if (tokens.size && (tokens.size > 1 || cartLines.value.some(({ tokenSymbol }) => !tokens.has(tokenSymbol)))) {
+    return '先に確定した注文と同じ通貨の商品を選んでください。'
+  }
+  return ''
+})
+const canFinishVisit = computed(() => !props.returning && !props.deferredCheckout && !historyLoading.value
+  && !unpaidOrders.value.length && (!locked.value || Boolean(receipt.value)))
+const showCheckout = computed(() => Boolean(props.deferredCheckout || receipt.value) || unpaidOrders.value.length > 0)
+const canStartCheckout = computed(() => !props.returning && showCheckout.value
+  && (paymentDeferred.value || (!cartLines.value.length
+    && (allowAdditionalOrder.value || !locked.value || Boolean(receipt.value)))))
+const checkoutLabel = computed(() => paymentDeferred.value ? '決済結果を確認' : 'お会計')
 
 function focusHeading() {
   heading.value?.focus()
@@ -103,10 +124,6 @@ function addSelectedItem() {
   if (!canAddToCart.value) return
   const lines = addCartItem(cartLines.value, selectedItem.value, selectedOptions.value)
   if (lines === cartLines.value) return
-  if (canContinueOrdering.value && !continueOrdering()) {
-    openCart()
-    return
-  }
   changeLines(lines)
 
   cartToast.value?.show('カートに追加しました')
@@ -147,37 +164,31 @@ async function loadCategories() {
   }
 }
 
-function addAnotherOrder() {
-  if (!canContinueOrdering.value || !continueOrdering()) return
-  cartDrawer.value?.close()
-}
-
 function startCheckout() {
   if (!canStartCheckout.value) return
-  // A visit resumed after an earlier payment can have no unpaid orders left.
-  const alreadyPaid = props.paidOrderIds.length > 0 && !historyLoading.value && !historyError.value
-    && (latestOrderId.value === null || orders.value.some(({ menu_order_id }) => menu_order_id === latestOrderId.value))
-    && orders.value.some(({ status }) => status === ORDER_STATUS_PAID)
-    && orders.value.every(({ status }) => [ORDER_STATUS_PAID, ORDER_STATUS_CANCELED].includes(status))
   cartDrawer.value?.close()
-  emit('checkout', alreadyPaid)
+  emit('checkout')
+}
+
+function finishVisit() {
+  if (canFinishVisit.value) emit('finish')
 }
 
 function confirmOrder() {
   emit('confirm-order', async () => {
-    await confirm()
-    if (!receipt.value) return
-    latestOrderId.value = receipt.value.menu_order_id
-    cartDrawer.value?.close()
-    cartToast.value?.show('ご注文を受け付けました')
-    refreshHistory()
+    if (additionalOrderError.value) return
+    const result = await confirm()
+    if (result) cartDrawer.value?.close()
+    return result
   })
 }
 
 onMounted(() => {
   loadCategories()
   refreshHistory()
-  if (locked.value && !receipt.value) openCart()
+  if (paymentDeferred.value) return
+  if (receipt.value && !allowAdditionalOrder.value) startCheckout()
+  else if (locked.value) openCart()
 })
 </script>
 
@@ -252,14 +263,14 @@ onMounted(() => {
           カテゴリー一覧へ戻る
         </button>
         <button
-          v-if="!selectedItem"
+          v-if="showCheckout && !allowAdditionalOrder && (!selectedItem || paymentDeferred)"
           class="button button--primary footer-action"
           type="button"
           :disabled="!canStartCheckout"
           @click="startCheckout"
-        >お会計</button>
+        >{{ checkoutLabel }}</button>
         <button
-          v-if="selectedItem"
+          v-if="selectedItem && !paymentDeferred"
           class="button button--primary footer-action add-to-cart"
           type="button"
           :disabled="!canAddToCart"
@@ -267,11 +278,18 @@ onMounted(() => {
         >
           カートに追加
         </button>
+        <button
+          class="button button--secondary footer-action"
+          type="button"
+          :disabled="!canFinishVisit"
+          @click="finishVisit"
+        >注文を終了する</button>
       </div>
     </footer>
 
     <div class="menu-tabs">
       <button
+        v-if="!paymentDeferred"
         ref="cartTab"
         class="button edge-tab cart-trigger"
         type="button"
@@ -297,18 +315,20 @@ onMounted(() => {
     </div>
 
     <CartDrawer
+      v-if="!paymentDeferred"
       ref="cartDrawer"
       :lines="cartLines"
       :quantity="cartQuantity"
       :totals="cartAmounts"
-      :can-continue-ordering="canContinueOrdering"
+      :has-confirmed-order="cartHasConfirmedOrder"
       :pending="pending"
       :locked="locked"
       :mixed-tokens="mixedTokens"
       :sending="sending"
-      :order-error="orderError"
+      :order-error="orderError || additionalOrderError"
+      :confirm-disabled="Boolean(additionalOrderError)"
       @confirm="confirmOrder"
-      @continue-ordering="addAnotherOrder"
+      @checkout="startCheckout"
       @change-quantity="changeCartQuantity"
       @remove="removeCartLine"
       @close="cartTab?.focus({ preventScroll: true })"

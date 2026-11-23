@@ -4,6 +4,7 @@ import { createAuthenticatedDeviceRequest } from '../../device-auth/services/cre
 function sameCheckout(current, expected) {
   return current?.phase === expected?.phase
     && current?.legacyPayment === expected?.legacyPayment
+    && current?.tokenSymbol === expected?.tokenSymbol
     && current?.summary?.checkout_id === expected?.summary?.checkout_id
     && current?.key === expected?.key
     && current?.paymentId === expected?.paymentId
@@ -33,15 +34,18 @@ export function createCheckoutFlow({
 
   return {
     order(deviceUuid, visitSessionId, expected, confirm) {
-      return update(deviceUuid, visitSessionId, expected, () => {
-        if (!expected) return confirm()
+      return update(deviceUuid, visitSessionId, expected, async (_record, save) => {
+        if (expected && expected.phase !== 'deferred') return
+        if (await confirm()) save({ phase: 'create' })
       })
     },
 
-    begin(deviceUuid, visitSessionId, expected, alreadyPaid) {
-      return update(deviceUuid, visitSessionId, expected, (record, save) => {
+    begin(deviceUuid, visitSessionId, expected) {
+      return update(deviceUuid, visitSessionId, expected, (_record, save) => {
+        if (expected?.phase === 'payment_deferred') return save({ ...expected, phase: 'sending' })
+        if (expected?.phase === 'deferred') return save({ ...expected, phase: 'create' })
         if (expected) return
-        save({ phase: alreadyPaid && record.paidOrderIds?.length ? 'complete' : 'create' })
+        save({ phase: 'create' })
       })
     },
 
@@ -91,7 +95,8 @@ export function createCheckoutFlow({
         const paidOrderIds = [...new Set([
           ...(record.paidOrderIds ?? []), ...summary.orders.map((order) => order.menu_order_id),
         ])]
-        save({ phase: 'complete', summary }, { paidOrderIds })
+        const phase = result.visit_session_status === 'closed' ? 'complete' : 'paid'
+        save({ phase, summary }, { paidOrderIds })
       })
     },
 
@@ -106,6 +111,18 @@ export function createCheckoutFlow({
         if (expected?.phase === 'completion_blocked') {
           save({ ...expected, phase: 'complete' })
         }
+      })
+    },
+
+    continueOrdering(deviceUuid, visitSessionId, expected) {
+      return update(deviceUuid, visitSessionId, expected, (_record, save) => {
+        if (expected?.phase === 'paid') save(undefined)
+      })
+    },
+
+    finish(deviceUuid, visitSessionId, expected) {
+      return update(deviceUuid, visitSessionId, expected, (_record, save) => {
+        if (!expected || expected.phase === 'paid') save({ ...expected, phase: 'complete' })
       })
     },
 
@@ -128,9 +145,7 @@ export function createCheckoutFlow({
 
     backToMenu(deviceUuid, visitSessionId, expected) {
       return update(deviceUuid, visitSessionId, expected, (_record, save) => {
-        if (['create', 'review', 'failed', 'completion_blocked'].includes(expected?.phase)) {
-          save(undefined)
-        }
+        if (expected?.phase === 'completion_blocked') save(undefined)
       })
     },
   }

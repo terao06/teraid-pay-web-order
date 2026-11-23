@@ -9,14 +9,15 @@ const props = defineProps({
   lines: { type: Array, required: true },
   quantity: { type: Number, required: true },
   totals: { type: Array, required: true },
-  canContinueOrdering: { type: Boolean, required: true },
+  hasConfirmedOrder: { type: Boolean, required: true },
   pending: { type: Boolean, required: true },
   locked: { type: Boolean, required: true },
   mixedTokens: { type: Boolean, required: true },
   sending: { type: Boolean, required: true },
   orderError: { type: String, required: true },
+  confirmDisabled: { type: Boolean, required: true },
 })
-const emit = defineEmits(['change-quantity', 'remove', 'close', 'confirm', 'continue-ordering'])
+const emit = defineEmits(['change-quantity', 'remove', 'close', 'confirm', 'checkout'])
 const drawer = ref(null)
 const removalToast = ref(null)
 const orderAlert = ref(null)
@@ -51,7 +52,9 @@ defineExpose({
       <strong>{{ quantity }}点</strong>
     </template>
 
+    <p v-if="hasConfirmedOrder" class="status-message">注文を確定しました。お会計に進んでください。</p>
     <CartReview
+      v-else
       :lines="lines"
       :locked="locked"
       @change-quantity="(key, quantity) => emit('change-quantity', key, quantity)"
@@ -61,7 +64,7 @@ defineExpose({
 
     <template #footer>
       <footer class="drawer-total">
-        <CartSummary :quantity="quantity" :totals="totals" />
+        <CartSummary v-if="!hasConfirmedOrder" :quantity="quantity" :totals="totals" />
         <p v-if="orderError" ref="orderAlert" class="status-message status-message--error" role="alert" tabindex="-1">{{ orderError }}</p>
         <p v-else-if="sending" class="status-message" role="status">注文を送信しています。</p>
         <p v-else-if="pending" class="status-message" role="status">前回の送信結果を確認するには、同じ内容で再試行してください。</p>
@@ -69,18 +72,18 @@ defineExpose({
           1回の注文に異なる通貨の商品が含まれています。カートの内容を調整してください。
         </p>
         <button
-          v-if="canContinueOrdering"
-          class="button button--secondary"
+          v-if="hasConfirmedOrder"
+          class="button button--primary"
           type="button"
-          @click="emit('continue-ordering')"
-        >追加注文へ</button>
+          @click="emit('checkout')"
+        >お会計へ</button>
         <button
           v-else
           class="button button--primary"
           type="button"
-          :disabled="sending || !lines.length || mixedTokens || (locked && !pending)"
+          :disabled="confirmDisabled || sending || !lines.length || mixedTokens || (locked && !pending)"
           @click="emit('confirm')"
-        >{{ pending && !sending ? '注文を再試行' : '注文を確定' }}</button>
+        >{{ pending && !sending ? '注文を再試行' : '注文を確定して会計へ' }}</button>
       </footer>
     </template>
     <template #feedback>

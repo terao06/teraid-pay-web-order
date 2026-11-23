@@ -21,11 +21,12 @@ function setup(sendOrder) {
     removeItem: () => { raw = null },
   }))
   let nextKey = 0
-  const openCart = (paidOrderIds) => useCartOrder(deviceUuid, visitId, {
+  const openCart = (paidOrderIds, allowAdditionalOrder) => useCartOrder(deviceUuid, visitId, {
     storage,
     sendOrder,
     generateKey: () => `order-key-${++nextKey}`,
     paidOrderIds,
+    allowAdditionalOrder,
   })
   return { storage, openCart, blockWrites: (value) => { writeBlocked = value } }
 }
@@ -39,6 +40,32 @@ test('clears a paid receipt when returning to the same visit for additional orde
   assert.equal(nextCart.locked.value, false)
   assert.equal(nextCart.receipt.value, null)
   assert.equal(storage.load(deviceUuid, visitId).receipt, null)
+})
+
+test('starts a new cart after returning from checkout and saves only the additional items', async () => {
+  const attempts = []
+  const { openCart } = setup(async (_device, _visit, lines, key) => {
+    attempts.push({ lines, key })
+    return { ...receipt, menu_order_id: receipt.menu_order_id + attempts.length - 1 }
+  })
+  const firstCart = openCart()
+  firstCart.changeLines([line])
+  await firstCart.confirm()
+
+  const additionalCart = openCart([], true)
+  assert.equal(additionalCart.locked.value, false)
+  assert.deepEqual(additionalCart.receipt.value, receipt)
+  assert.equal(await additionalCart.confirm(), undefined)
+
+  const additionalLine = { ...line, itemId: 11, key: 'line-b' }
+  additionalCart.changeLines([additionalLine])
+  const restored = openCart([], true)
+  assert.deepEqual(restored.lines.value, [additionalLine])
+  assert.equal(restored.receipt.value, null)
+  assert.equal((await restored.confirm()).menu_order_id, 457)
+  assert.deepEqual(attempts, [
+    { lines: [line], key: 'order-key-1' }, { lines: [additionalLine], key: 'order-key-2' },
+  ])
 })
 
 test('saves the order before sending and prevents duplicate submits and edits in flight', async () => {
@@ -66,7 +93,7 @@ test('saves the order before sending and prevents duplicate submits and edits in
   assert.deepEqual(openCart().receipt.value, receipt)
 })
 
-test('retries the exact same lines and key after a lost response and reload, then starts a separate order', async () => {
+test('retries the exact same lines and key after a lost response and locks the cart after confirmation', async () => {
   const attempts = []
   const { openCart } = setup(async (_device, _visit, lines, key) => {
     attempts.push({ lines, key })
@@ -80,13 +107,14 @@ test('retries the exact same lines and key after a lost response and reload, the
   assert.match(cart.orderError.value, /再試行/)
   const restored = openCart()
   restored.changeLines([])
-  await restored.confirm()
+  assert.deepEqual(await restored.confirm(), receipt)
   assert.deepEqual(attempts, Array(2).fill({ lines: [line], key: 'order-key-1' }))
   assert.deepEqual(restored.receipt.value, receipt)
-  assert.equal(restored.continueOrdering(), true)
   restored.changeLines([line])
-  await restored.confirm()
-  assert.equal(attempts[2].key, 'order-key-2')
+  assert.equal(restored.locked.value, true)
+  assert.deepEqual(restored.lines.value, [])
+  assert.equal(await restored.confirm(), undefined)
+  assert.equal(attempts.length, 2)
 })
 
 test('allows cart correction on an initial validation error and retains contents', async () => {

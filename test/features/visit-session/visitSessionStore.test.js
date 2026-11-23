@@ -103,3 +103,48 @@ test('rejects invalid checkout state and checkout state without a visit', (t) =>
   visitSessionStore.save('device', { ...record, visitSessionId: 123, checkout: { phase: 'sending' } })
   assert.throws(() => visitSessionStore.load('device'), VisitSessionStorageError)
 })
+
+test('restores the confirmed payment and order numbers before visit closure', (t) => {
+  mockStorage(t)
+  const record = {
+    requestId: 'request-1',
+    visitSessionId: 123,
+    paidOrderIds: [456],
+    checkout: {
+      phase: 'paid',
+      summary: {
+        checkout_id: 11, token_symbol: 'JPYC', total_amount: '100.000000',
+        orders: [{ menu_order_id: 456, total_amount: '100.000000', items: [] }],
+      },
+    },
+  }
+  visitSessionStore.save('device', record)
+  assert.deepEqual(visitSessionStore.load('device'), record)
+})
+
+test('restores a checkout deferred by returning to the menu', (t) => {
+  mockStorage(t)
+  const record = { requestId: 'request-1', visitSessionId: 123, checkout: { phase: 'deferred' } }
+  visitSessionStore.save('device', record)
+  assert.deepEqual(visitSessionStore.load('device'), record)
+  record.checkout.tokenSymbol = 'JPYC'
+  visitSessionStore.save('device', record)
+  assert.deepEqual(visitSessionStore.load('device'), record)
+})
+
+test('restores the original checkout ID and key for a deferred payment', (t) => {
+  mockStorage(t)
+  const record = {
+    requestId: 'request-1',
+    visitSessionId: 123,
+    checkout: {
+      phase: 'payment_deferred', key: 'payment-key', legacyPayment: true,
+      summary: {
+        checkout_id: 11, token_symbol: 'JPYC', total_amount: '100.000000',
+        orders: [{ menu_order_id: 456, total_amount: '100.000000', items: [] }],
+      },
+    },
+  }
+  visitSessionStore.save('device', record)
+  assert.deepEqual(visitSessionStore.load('device'), record)
+})

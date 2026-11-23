@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { computed, ref, toValue } from 'vue'
 import { ApiError } from '../../components/api/apiClient.js'
 import { submitOrder } from '../order/orderRegistration.js'
 import { cartStore, CartStorageError } from './cartStore.js'
@@ -16,6 +16,7 @@ export function useCartOrder(deviceUuid, visitSessionId, {
   sendOrder = submitOrder,
   generateKey = () => crypto.randomUUID(),
   paidOrderIds = [],
+  allowAdditionalOrder = false,
 } = {}) {
   const cart = ref({ lines: [], pendingKey: null, receipt: null })
   const storageBlocked = ref(false)
@@ -36,7 +37,8 @@ export function useCartOrder(deviceUuid, visitSessionId, {
   const lines = computed(() => cart.value.lines)
   const pending = computed(() => Boolean(cart.value.pendingKey))
   const receipt = computed(() => cart.value.receipt)
-  const locked = computed(() => storageBlocked.value || sending.value || pending.value || Boolean(receipt.value))
+  const locked = computed(() => storageBlocked.value || sending.value || pending.value
+    || (Boolean(receipt.value) && !toValue(allowAdditionalOrder)))
   const mixedTokens = computed(() => new Set(lines.value.map(({ tokenSymbol }) => tokenSymbol)).size > 1)
 
   function save(nextCart) {
@@ -46,7 +48,7 @@ export function useCartOrder(deviceUuid, visitSessionId, {
 
   function changeLines(updatedLines) {
     if (locked.value) return
-    const nextCart = { ...cart.value, lines: updatedLines }
+    const nextCart = { ...cart.value, lines: updatedLines, receipt: null }
     try {
       save(nextCart)
     } catch {
@@ -67,6 +69,7 @@ export function useCartOrder(deviceUuid, visitSessionId, {
       }
       const result = await sendOrder(deviceUuid, visitSessionId, lines.value, cart.value.pendingKey)
       save({ lines: [], pendingKey: null, receipt: result })
+      return result
     } catch (error) {
       if (error instanceof ApiError && error.status === 422 && !retrying) {
         try {
@@ -88,17 +91,5 @@ export function useCartOrder(deviceUuid, visitSessionId, {
     }
   }
 
-  function continueOrdering() {
-    if (!receipt.value) return false
-    try {
-      save({ lines: [], pendingKey: null, receipt: null })
-      orderError.value = ''
-      return true
-    } catch {
-      orderError.value = storageMessage
-      return false
-    }
-  }
-
-  return { lines, pending, receipt, locked, mixedTokens, sending, orderError, changeLines, confirm, continueOrdering }
+  return { lines, pending, receipt, locked, mixedTokens, sending, orderError, changeLines, confirm }
 }
